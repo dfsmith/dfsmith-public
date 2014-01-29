@@ -5,7 +5,7 @@
 #include <math.h>
 #include <errno.h>
 #include "tcl-patterns.h"
-#include "lib/fft.h"
+#include "fft.h"
 
 typedef unsigned int uint;
 typedef unsigned char u8;

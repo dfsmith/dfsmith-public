@@ -8,8 +8,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #define SOCKLIBINCLUDES
-#include "lib/socklib.h"
-#include "lib/fft.h"
+#include "socklib.h"
+#include "fft.h"
 
 #define lengthof(x) (sizeof(x)/sizeof(*(x)))
 #define MAX(a,b) ((a)>(b)?(a):(b))
