@@ -24,12 +24,12 @@
 #endif
 
 #include "i2c-arduino.h"
-typedef i2c_arduino_io shtio_t;
+#define i2c_io i2c_arduino_io
 #include "sht.h"
 /* -- SHT functions --- */
 
 struct shtport_s {
-	const shtio_t *io;
+	const i2c_io *io;
 	/* open */
 	shtport *next;        /* used when we have a list of SHT devices */
 	unsigned long int lastdata; /* the last data bits read from this SHT (not CRC) */
@@ -161,7 +161,7 @@ static void sht_out8(shtport *s,unsigned int x) {
 	/* send 8 bits of x to every device on SHT list, lastack&1 will be 0 if acked */
 	shtport *ss;
 	unsigned int count;
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 	TRACE(("out8 %02X\n",x));
 
 	dw(io,1);
@@ -187,7 +187,7 @@ static void sht_in8(shtport *s,int last,int crc) {
 	/* read 8 bits of data from SHT list, set last to prevent ack, crc indicates CRC input */
 	int i;
 	shtport *ss;
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 
 	ddin(io);
 	clkl(io);
@@ -220,7 +220,7 @@ static void sht_wait(shtport *s) {
 	int t=0;
 	int tracking=0;
 	shtport *ss;
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 
 	TRACE(("waiting..."));
 	ddin(io);
@@ -255,7 +255,7 @@ static int sht_start(shtport *s,int fast) {
 		8,128 /* finish sequence */};
 	const u8 *q;
 	shtport *ss;
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 	int out=0;
 
 	/* initialize SHT list */
@@ -283,7 +283,7 @@ static int sht_start(shtport *s,int fast) {
 	}
 
 static void sht_powercycle(shtport *s) {
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 	power(io,0);
 	longwait(io);
 	power(io,1);
@@ -291,7 +291,7 @@ static void sht_powercycle(shtport *s) {
 	}
 
 static void sht_init(shtport *s) {
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 	/* at this point the shtport is usable */
 	clkout(io);
 	clkl(io); /* clk should be low at power on */
@@ -301,7 +301,7 @@ static void sht_init(shtport *s) {
 	}
 
 static void sht_deinit(shtport *s) {
-	const shtio_t *io=s->io;
+	const i2c_io *io=s->io;
 	ddin(io);
 	clkin(io);
 	}
@@ -356,7 +356,7 @@ void sht_close(shtport *s) {
 		}
 	}
 
-shtport *sht_open(const shtio_t *io,double voltage,int *errcode) {
+shtport *sht_open(const i2c_io *io,double voltage,int *errcode) {
 	/* get a handle to sht device at given I/O address and bit location */
 	/* parallel port must be statically available (global) */
 	shtport *s=NULL;

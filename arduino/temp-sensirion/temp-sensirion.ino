@@ -1,11 +1,13 @@
 #include "i2c-arduino.h"
-typedef i2c_arduino_io shtio_t;
+#define i2c_io i2c_arduino_io
 #include "sht.h"
+#include "bmp.h"
 
 #define LED_PIN 13
-const i2c_arduino_io iopins[]={
-	{A5,A4},
-	{A2,A3},
+const i2c_arduino_io bmppins={2,3,50};
+const i2c_arduino_io shtpins[]={
+	{A5,A4,50},
+	{A2,A3,50},
 };
 shtport *sht[]={NULL,NULL};
 #define SHTS (sizeof(sht)/sizeof(*sht))
@@ -17,7 +19,7 @@ void setup(void) {
 	Serial.begin(57600);
 	Serial.println("# start SHT temperature and humidity capture");
 	for(i=0;i<SHTS;i++)
-		sht[i]=sht_open(&iopins[i],VOLTAGE,NULL);
+		sht[i]=sht_open(&shtpins[i],VOLTAGE,NULL);
 }
 
 static void printtemp(int probe,double temp_c,double rh_pc) {

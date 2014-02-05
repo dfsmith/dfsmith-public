@@ -21,7 +21,7 @@ typedef struct shtport_s shtport;
 
 /* -- open/close -- */
 
-shtport *sht_open(const shtio_t *io,double voltage,int *errorcode);
+shtport *sht_open(const i2c_io *io,double voltage,int *errorcode);
 	/* open SHT and confirm/set status register to 14-bit temp, 12-bit RH */
 	/* io is the hardware description (see sht-parallel.h, sht-arduino.h) */
 	/* voltage is the voltage applied to the Vdd line of the SHT */

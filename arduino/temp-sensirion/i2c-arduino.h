@@ -16,6 +16,7 @@
 typedef struct {
 	unsigned char c;	/* SCL pin */
 	unsigned char d;	/* SDA pin */
+	unsigned int half_clock;/* microseconds for half-clock period */
 } i2c_arduino_io;
 
 #if PULL_PUSH /* pull low, push high */
@@ -44,8 +45,8 @@ typedef struct {
 #define clkin(io) pinMode((io)->c,INPUT)
 
 /* wait a half-clock with data I/O */
-#define w(io) delayMicroseconds(50)
-#define longwait(io) delay(1000)
+#define w(io) delayMicroseconds((io)->half_clock)
+#define longwait(io) delay(100*(io)->half_clock)
 
 /* generalize misc and port open/close */
 #define power(io,on) /* energize 5V line */
