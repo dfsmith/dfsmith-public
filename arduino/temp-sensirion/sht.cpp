@@ -285,9 +285,9 @@ static int sht_start(shtport *s,int fast) {
 static void sht_powercycle(shtport *s) {
 	const i2c_io *io=s->io;
 	power(io,0);
-	longwait(io);
+	wait_us(io,1000000);
 	power(io,1);
-	longwait(io);
+	wait_us(io,200000);
 	}
 
 static void sht_init(shtport *s) {

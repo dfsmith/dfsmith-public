@@ -1,5 +1,10 @@
+#ifdef I2CDEBUG
+#include "i2c-debug.h"
+#define i2c_io i2c_debug_io
+#else
 #include "i2c-arduino.h"
 #define i2c_io i2c_arduino_io
+#endif
 #include "i2c.h"
 
 void i2c_deinit(const i2c_io *io) {
@@ -7,19 +12,11 @@ void i2c_deinit(const i2c_io *io) {
 	power(io,0);
 }
 
-bool i2c_init(const i2c_io *io,int hc_us) {
+bool i2c_init(const i2c_io *io) {
 	power(io,1);
 	if (!openport(io)) return 0;
 	ddin(io);
 	return 1;
-}
-
-void i2c_start(const i2c_io *io) {
-	clkh(io);
-	dw(io,1);
-	w(io);
-	dw(io,0);
-	w(io);
 }
 
 void i2c_restart(const i2c_io *io) {
@@ -31,10 +28,13 @@ void i2c_restart(const i2c_io *io) {
 	dw(io,0);
 }
 
-void i2c_stop(const i2c_io *io) {
+void i2c_start(const i2c_io *io) {
 	clkh(io);
-	w(io);
 	dw(io,1);
+	w(io);
+	dw(io,0);
+	w(io);
+	clkl(io);
 }
 
 bool i2c_send(const i2c_io *io,u8 b) {
@@ -56,6 +56,14 @@ bool i2c_send(const i2c_io *io,u8 b) {
 	return ack;
 }
 
+void i2c_stop(const i2c_io *io) {
+	w(io);
+	clkh(io);
+	w(io);
+	dw(io,1);
+	w(io);
+}
+
 u8 i2c_receive(const i2c_io *io,bool ack) {
 	u8 b;
 	int i;
@@ -72,40 +80,46 @@ u8 i2c_receive(const i2c_io *io,bool ack) {
 	w(io);
 	clkl(io);
 	dw(io,0);
+	return b;
 }
 
-int i2c_read8(const i2c_io *io,i2c_addr addr) {
-	int x;
-	i2c_start(io);
-	if (!i2c_send(io,addr<<1 | 1)) return -1;
-	x=i2c_receive(io,0);
+static long int readN(const i2c_io *io,i2c_addr addr,u8 reg,int n) {
+
+	int x=-1;
+	do {
+		i2c_start(io);
+		if (!i2c_send(io,addr<<1 | 0)) break;
+		if (!i2c_send(io,reg)) break;
+		i2c_restart(io);
+			if (!i2c_send(io,addr<<1 | 1)) break;
+		for(x=0;n>0;n--)
+			x=(x<<8) | i2c_receive(io,(n>1));
+	} while(0);
 	i2c_stop(io);
 	return x;
 }
 
-long int i2c_read16(const i2c_io *io,i2c_addr addr) {
-	int x;
-	i2c_start(io);
-	if (!i2c_send(io,addr<<1 | 1)) return -1;
-	x=         i2c_receive(io,1);
-	x=(x<<8) | i2c_receive(io,0);
-	i2c_stop(io);
-	return x;
+int i2c_read8(const i2c_io *io,i2c_addr addr,u8 reg) {
+	return readN(io,addr,reg,1);
 }
 
-long int i2c_read24(const i2c_io *io,i2c_addr addr) {
-	u32 x;
-	i2c_start(io);
-	if (!i2c_send(io,addr<<1 | 1)) return -1;
-	x=         i2c_receive(io,1);
-	x=(x<<8) | i2c_receive(io,1);
-	x=(x<<8) | i2c_receive(io,0);
-	i2c_stop(io);
-	return x;
+long int i2c_read16(const i2c_io *io,i2c_addr addr,u8 reg) {
+	return readN(io,addr,reg,2);
 }
 
-bool i2c_write8(const i2c_io *io,i2c_addr addr,u8 val) {
-	i2c_start(io);
-	if (!i2c_send(io,addr<<1 | 0)) return 0;
-	return i2c_send(io,val);
+long int i2c_read24(const i2c_io *io,i2c_addr addr,u8 reg) {
+	return readN(io,addr,reg,3);
+}
+
+bool i2c_write8(const i2c_io *io,i2c_addr addr,u8 reg,u8 val) {
+	bool r=0;
+	do {
+		i2c_start(io);
+		if (!i2c_send(io,addr<<1 | 0)) break;
+		if (!i2c_send(io,reg)) break;
+		i2c_send(io,val);
+		r=1;
+	} while(0);
+	i2c_stop(io);
+	return r;
 }

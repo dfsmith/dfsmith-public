@@ -2,6 +2,7 @@
 
 #ifndef dfs_types_h
 #define dfs_types_h
+#include <stdint.h>
 
 typedef unsigned int uint;
 typedef unsigned long int ulong;

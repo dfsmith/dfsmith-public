@@ -13,6 +13,11 @@
 /* interface level control */
 #include <Arduino.h>
 
+/* some Arduino.h defines cause trouble */
+#undef B1
+#undef B10
+#undef B11
+
 typedef struct {
 	unsigned char c;	/* SCL pin */
 	unsigned char d;	/* SDA pin */
@@ -45,8 +50,8 @@ typedef struct {
 #define clkin(io) pinMode((io)->c,INPUT)
 
 /* wait a half-clock with data I/O */
-#define w(io) delayMicroseconds((io)->half_clock)
-#define longwait(io) delay(100*(io)->half_clock)
+#define w(IO) delayMicroseconds((IO)->half_clock)
+#define wait_us(IO,US) delayMicroseconds(US)
 
 /* generalize misc and port open/close */
 #define power(io,on) /* energize 5V line */
