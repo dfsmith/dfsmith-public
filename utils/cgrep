@@ -1,0 +1,21 @@
+#!/bin/bash
+# Recursive search within C files and the like.
+
+search="$1"; shift
+path=("$@")
+
+if [ ${#path[@]} -lt 1 ]; then
+	path=(".")
+fi
+
+matchfiles='\.c$|\.cpp$|\.h$|\.py$|[Mm]akefile$'
+
+IFS=''
+( for p in "${path[@]}"; do
+	find "$p" -print0
+done; ) | egrep -z "$matchfiles" | xargs -0 -P4 -n4 egrep -Hn "$search"
+
+# xargs replaces:
+# ( while read -d '' file; do
+#	egrep -Hn "$search" "$file"
+#done; )
