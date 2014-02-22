@@ -32,7 +32,7 @@ extern bmp_port *bmp_new(const i2c_io *);
 extern void bmp_delete(bmp_port *);
 
 extern bool bmp_getreading(bmp_port *);
-extern double bmp_getlasttemp(bmp_port *);
-extern double bmp_getlastpressure(bmp_port *);
+extern double bmp_getlasttemp_degc(bmp_port *);
+extern double bmp_getlastpressure_pascal(bmp_port *);
 
 #endif

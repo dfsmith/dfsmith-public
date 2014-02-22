@@ -68,6 +68,7 @@ struct tempdata_s {
 	int probe;
 	double temp;
 	double rh;
+	double pressure;
 };
 
 struct tempavg_s {
@@ -80,7 +81,8 @@ const struct tempavg_s tempavg_zero={NULL,{},0,0};
 
 static struct tempdata_s *decodedata(char *line) {
 	static struct tempdata_s d;
-	if (sscanf(line,"probe %d %lfdegC %lf%%rh",&d.probe,&d.temp,&d.rh)!=3) {
+	if (sscanf(line,"probe %d %lfdegC %lf%%rh %lfhPa",
+		&d.probe,&d.temp,&d.rh,&d.pressure)!=4) {
 		return NULL;
 	}
 	gettimeofday(&d.when,NULL);
