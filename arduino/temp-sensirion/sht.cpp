@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #ifndef TRACE
-#define TRACE(x) serialtrace x
-//#define TRACE(x)
+//#define TRACE(x) serialtrace x
+#define TRACE(x)
 #endif
 #ifndef NULL
 #define NULL ((void*)0)
@@ -164,7 +164,7 @@ static void sht_out8(shtport *s,unsigned int x) {
 	const i2c_io *io=s->io;
 	TRACE(("out8 %02X\n",x));
 
-	dw(io,1);
+	for(ss=s; ss; ss=ss->next) dw(ss->io,1);
 	w(io);
 	clkl(io);
 	/* data is good on rising edge of clk */

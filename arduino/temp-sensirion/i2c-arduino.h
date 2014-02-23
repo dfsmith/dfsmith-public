@@ -22,33 +22,33 @@ typedef struct {
 	unsigned char c;	/* SCL pin */
 	unsigned char d;	/* SDA pin */
 	unsigned int half_clock;/* microseconds for half-clock period */
+	unsigned int ppc:1;	/* push-pull SCL */
+	unsigned int ppd:1;	/* push-pull SDA */
 } i2c_arduino_io;
 
-#define PULL_PUSH 0
-#if PULL_PUSH /* pull low, push high */
-	/* use with 5V tolerent I2C devices */
-	#define lineh(p) digitalWrite(p,HIGH),pinMode(p,OUTPUT)
-	#define linel(p) digitalWrite(p,LOW),pinMode(p,OUTPUT)
-	#define ddin(io) do{pinMode((io)->d,INPUT);lineh((io)->d);}while(0)
-#else /* pull low, float high */
-	/* use with voltage converters: never drives output HIGH with low impedance */
-	#define lineh(p) pinMode(p,INPUT),digitalWrite(p,HIGH)
-	#define linel(p) digitalWrite(p,LOW),pinMode(p,OUTPUT)
-	#define ddin(io) lineh((io)->d)
-#endif
+/* use with 5V tolerent I2C devices */
+#define pplineh(p) digitalWrite(p,HIGH),pinMode(p,OUTPUT)
+#define pplinel(p) digitalWrite(p,LOW),pinMode(p,OUTPUT)
+
+/* use with voltage converters: never drives output HIGH with low impedance */
+#define phlineh(p) pinMode(p,INPUT),digitalWrite(p,HIGH)
+#define phlinel(p) digitalWrite(p,LOW),pinMode(p,OUTPUT)
+
+/* read data line, set data line high or low */
+#define dr(io)   (digitalRead((io)->d)==HIGH)
+#define dh(io)   ((io)->ppd?pplineh((io)->d):phlineh((io)->d))
+#define dl(io)   ((io)->ppd?pplinel((io)->d):phlinel((io)->d))
+#define dw(io,x) ((x)?dh(io):dl(io))
 
 /* read clk line, set clk high, set clk low */
 #define clkr(io)  (digitalRead((io)->c)==HIGH)
-#define clkh(io)  lineh((io)->c)
-#define clkl(io)  linel((io)->c)
-
-/* read data line, set data line high or low */
-#define dr(io)    (digitalRead((io)->d)==HIGH)
-#define dw(io,x)  ((x)?lineh((io)->d):linel((io)->d))
+#define clkh(io)  ((io)->ppc?pplineh((io)->c):phlineh((io)->c))
+#define clkl(io)  ((io)->ppc?pplinel((io)->c):phlinel((io)->c))
 
 /* set data direction to inb (read, pull high) or outb (write) */
 #define clkout(io) pinMode((io)->c,OUTPUT)
 #define clkin(io) pinMode((io)->c,INPUT)
+#define ddin(io) do{pinMode((io)->d,INPUT);dh(io);}while(0)
 
 /* wait a half-clock with data I/O */
 #define w(IO) delayMicroseconds((IO)->half_clock)

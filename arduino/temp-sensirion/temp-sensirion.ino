@@ -60,9 +60,9 @@ static bool bmpgetreading(probedata *p) {
 }
 
 static probedata probe[]={
-	{"garage box",    0,{A5,A4,200},shtinit,shtgetreading},
-//	{"garage outside",1,{A2,A3,200},shtinit,shtgetreading},
-//	{"garage inside", 2,{ 2, 3,200},bmpinit,bmpgetreading},
+	{"garage box",    0,{A5,A4,200,1,0},shtinit,shtgetreading},
+	{"garage outside",1,{A2,A3,200,1,0},shtinit,shtgetreading},
+//	{"garage inside", 2,{ 2, 3,200,0,0},bmpinit,bmpgetreading},
 };
 #define PROBES (sizeof(probe)/sizeof(*probe))
 
