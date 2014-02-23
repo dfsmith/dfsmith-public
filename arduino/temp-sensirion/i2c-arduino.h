@@ -24,6 +24,7 @@ typedef struct {
 	unsigned int half_clock;/* microseconds for half-clock period */
 } i2c_arduino_io;
 
+#define PULL_PUSH 0
 #if PULL_PUSH /* pull low, push high */
 	/* use with 5V tolerent I2C devices */
 	#define lineh(p) digitalWrite(p,HIGH),pinMode(p,OUTPUT)

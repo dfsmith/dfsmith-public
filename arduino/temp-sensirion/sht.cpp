@@ -1,5 +1,5 @@
 /* > sht-arduino.c */
-/* (C) 2005, Daniel F. Smith <dfs1122@gmail.com> */
+/* (C) 2005,2013 Daniel F. Smith <dfs1122@gmail.com> */
 /*
  * This is free software covered by the Lesser GPL.
  * See COPYING or http://gnu.org/licenses/lgpl.txt for details.
@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #ifndef TRACE
-//#define TRACE(x) serialtrace x
-#define TRACE(x)
+#define TRACE(x) serialtrace x
+//#define TRACE(x)
 #endif
 #ifndef NULL
 #define NULL ((void*)0)
@@ -178,7 +178,7 @@ static void sht_out8(shtport *s,unsigned int x) {
 	for(ss=s; ss; ss=ss->next) {
 		ss->crc=crc8(ss->crc,(x>>8)&0xFF);
 		ss->lastack=(ss->lastack<<1) | dr(ss->io);
-		TRACE(("ac=%d crc=0x%X x=%X\n",ss->lastack,ss->crc,x));
+		TRACE(("ack=%d crc=0x%X x=0x%04X\n",ss->lastack,ss->crc,x));
 		}
 	clkh(io); w(io); clkl(io);
 	}
@@ -329,7 +329,7 @@ static void sht_cmdwrite(shtport *s,int cmd,...) {
 
 static void sht_cmdread(shtport *s,int cmd,int n) {
 	/* send a command and input a byte from SHT list */
-	TRACE(("read1 cmd=0x%02X n=%d\n",cmd,n));
+	TRACE(("read%d cmd=0x%02X\n",n,cmd,n));
 	sht_start(s,1);  SCOPE(-1,-1);
 	sht_out8(s,cmd); SCOPE(-1,-1);
 	sht_wait(s);     SCOPE(-1,-1);
@@ -420,6 +420,7 @@ shtport *sht_open(const i2c_io *io,double voltage,int *errcode) {
 		return s;
 		} while(0);
 	/* cannot find SHT: error */
+	TRACE(("sht_open failed code %d\n",errc));
 	if (errcode) *errcode=errc;
 	SCOPE(-1,-1);
 	sht_deinit(s);

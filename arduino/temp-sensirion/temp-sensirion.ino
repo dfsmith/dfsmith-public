@@ -60,20 +60,29 @@ static bool bmpgetreading(probedata *p) {
 }
 
 static probedata probe[]={
-	{"garage box",    0,{A5,A4,50},shtinit,shtgetreading},
-	{"garage outside",1,{A2,A3,50},shtinit,shtgetreading},
-	{"garage inside", 2,{ 2, 3,50},bmpinit,bmpgetreading},
+	{"garage box",    0,{A5,A4,200},shtinit,shtgetreading},
+//	{"garage outside",1,{A2,A3,200},shtinit,shtgetreading},
+//	{"garage inside", 2,{ 2, 3,200},bmpinit,bmpgetreading},
 };
 #define PROBES (sizeof(probe)/sizeof(*probe))
 
 void setup(void) {
 	int i;
+	bool r;
+	probedata *p;
 	pinMode(LED_PIN,OUTPUT);
 	Serial.begin(57600);
 	Serial.println("# start SHT temperature and humidity capture");
 	
-	for(i=0;i<PROBES;i++)
-		probe[i].init(&probe[i]);
+	for(i=0;i<PROBES;i++) {
+		p=&probe[i];
+		r=p->init(&probe[i]);
+		Serial.print("# probe ");
+		Serial.print(i);
+		Serial.print(" \"");
+		Serial.print(p->name);
+		Serial.println(r?"\" started":"\" no_start");
+	}
 }
 
 static void printreading(probedata *p) {

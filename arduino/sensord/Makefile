@@ -1,6 +1,7 @@
-CFLAGS=-Wall -I../../lib
+LIBDIR=$(HOME)/c/lib
+CFLAGS=-Wall -I$(LIBDIR)
 
-sensord: sensord.o ../../lib/socklib.o
+sensord: sensord.o $(LIBDIR)/socklib.o
 
 clean:
 	rm -f *.o sensord
