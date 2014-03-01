@@ -62,7 +62,7 @@ static bool bmpgetreading(probedata *p) {
 static probedata probe[]={
 	{"garage box",    0,{A5,A4,200,1,0},shtinit,shtgetreading},
 	{"garage outside",1,{A2,A3,200,1,0},shtinit,shtgetreading},
-//	{"garage inside", 2,{ 2, 3,200,0,0},bmpinit,bmpgetreading},
+	{"garage inside", 2,{ 2, 3,200,0,0},bmpinit,bmpgetreading},
 };
 #define PROBES (sizeof(probe)/sizeof(*probe))
 
@@ -73,6 +73,7 @@ void setup(void) {
 	pinMode(LED_PIN,OUTPUT);
 	Serial.begin(57600);
 	Serial.println("# start SHT temperature and humidity capture");
+	Serial.println("# Commands: N (names)");
 	
 	for(i=0;i<PROBES;i++) {
 		p=&probe[i];
@@ -133,5 +134,23 @@ void loop(void) {
 		p=&probe[i];
 		p->getreading(p);
 		printreading(p);
+	}
+
+	if (Serial.available()>0) {
+		int cmd;
+		cmd=Serial.read();
+		switch(cmd) {
+		case 'N':
+			for(i=0;i<PROBES;i++) {
+				p=&probe[i];
+				Serial.print("# probe ");
+				Serial.print(p->number);
+				Serial.print(" ");
+				Serial.println(p->name);
+			}
+			break;
+		default:
+			break;
+		}
 	}
 }
