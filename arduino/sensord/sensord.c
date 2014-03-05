@@ -24,6 +24,8 @@
 #define MAXPROBES 10
 #define PORT 8888
 
+#define DBG(x) x
+
 /* HTTP headers */
 #define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8d",LEN)
 const char header_ok[]="HTTP/1.1 200 OK\r\nContent-Length: 00000000\r\n"
@@ -62,60 +64,176 @@ const char header_notfound[]="HTTP/1.1 404 Not found\r\n\r\n";
 
 /* -- main program -- */
 
+typedef struct {
+	double temp;
+	double rh;
+	double pressure;
+	uint havetemp:1;
+	uint haverh:1;
+	uint havepressure:1;
+} measurement;
+#define MEASUREMENT_ZERO {0.0,0.0,0.0, 1,1,1}
+const measurement measurement_null={0.0,0.0,0.0, 0,0,0};
+const measurement measurement_zero=MEASUREMENT_ZERO;
+
 struct tempdata_s {
 	struct tempdata_s *next,*prev;
 	struct timeval when;
 	int probe;
-	double temp;
-	double rh;
-	double pressure;
+	measurement m;
 };
 
 struct tempavg_s {
 	struct tempdata_s *list;
-	struct tempdata_s sum; /* sum of items in list */
-	int n; /* number of items in list */
 	int sumreset; /* when 0, recalculate sum */
+	measurement sum; /* sum of items in list */
+	measurement n; /* number of items in list */
 };
-const struct tempavg_s tempavg_zero={NULL,{},0,0};
+const struct tempavg_s tempavg_zero={NULL,0,MEASUREMENT_ZERO,MEASUREMENT_ZERO};
 
-static struct tempdata_s *decodedata(char *line) {
-	static struct tempdata_s d;
-	if (sscanf(line,"probe %d %lfdegC %lf%%rh %lfhPa",
-		&d.probe,&d.temp,&d.rh,&d.pressure)!=4) {
-		return NULL;
+typedef struct {
+	/* not a list yet: struct probeport_s *next,*prev; */
+	int fd;
+	char *line;
+	int current;
+	int max;
+	struct tempdata_s data;
+} probeport;
+
+static void measurementop(measurement *dest,char op,const measurement *arg) {
+	#define DIVOP(READING,OP) do{if (arg->have##READING && arg->READING!=0.0) {dest->READING /= arg->READING;} else {dest->have##READING=0;}}while(0)
+	#define UNIOP(READING,OP) do{if (arg->have##READING) {dest->READING OP;}}while(0)
+	#define REGOP(READING,OP) do{if (arg->have##READING) {dest->READING OP arg->READING;}}while(0)
+	#define DOOPS(DOOP,OP) do{DOOP(temp,OP); DOOP(rh,OP); DOOP(pressure,OP);}while(0)
+	switch(op) {
+	case '=':
+		*dest=*arg;
+		break;
+	case '+': DOOPS(REGOP,+=); break;
+	case '-': DOOPS(REGOP,-=); break;
+	case '*': DOOPS(REGOP,*=); break;
+	case '/': DOOPS(DIVOP,/=); break;
+	case 'i': DOOPS(UNIOP,++); break; /* increment if present */
+	case 'd': DOOPS(UNIOP,--); break; /* increment if present */
+	default: break;
 	}
-	gettimeofday(&d.when,NULL);
-	return &d;
 }
 
-static struct tempdata_s *readmoredata(int fd,const char **error) {
-	static int counter=0;
-	static char line[60]={}; /* keep last char '\0' */
-	char *c;
-	ssize_t len;
-	
-	len=read(fd,&line[counter],sizeof(line)-1-counter);
-	if (len==-1) {if (error) *error="bad read"; return NULL;}
-	c=strchr(line,'\n');
-	if (len==0 && !c) {if (error) *error="no more data"; return NULL;}
-	counter+=len;
+static char *measurement_string(const measurement *m,int u) {
+	static char line[100],*l,*e;
+	l=line;
+	e=&line[sizeof(line)-1];
 
-	if (c || counter>=sizeof(line)-1) {
-		struct tempdata_s *d;
-
-		if (!c) c=&line[sizeof(line)-1];
-		*c='\0';
-		d=decodedata(line);
-		/* eat off decoded data */
-		c++;
-		len=&line[counter]-c;
-		for(counter=0;len>0;len--) {
-			line[counter++]=*c++;
-		}
-		return d;
+	if (!m) {
+		if (u) snprintf(l,e-l,"?temp ?humidity ?pressure");
+		else   snprintf(l,e-l,"? ? ?");
+		return line;
 	}
-	return NULL;
+
+	#define PRINTM(MM,UN,SP) \
+		if (m->have##MM) l+=snprintf(l,e-l,"%f%s%s",m->MM,UN,SP); \
+		else             l+=snprintf(l,e-l,"?%s%s",UN,SP);
+	PRINTM(temp,u?"degC":""," ");
+	PRINTM(rh,u?"%rh":""," ");
+	PRINTM(pressure,u?"hPa":"","");
+	return line;
+}
+
+static void probe_delete(probeport *pp) {
+	if (pp->fd!=-1) close(pp->fd);
+	free(pp);
+}
+
+static probeport *probe_new(const char *probename,int maxlinelen) {
+	probeport *pp;
+	int fd;
+	
+	fd=open(probename,O_RDONLY);
+	if (fd==-1) return NULL;
+	
+	pp=malloc(sizeof(*pp)+maxlinelen);
+	if (!pp) return NULL;
+	pp->fd=fd;
+	pp->line=(char*)(pp+1);
+	pp->current=0;
+	pp->max=maxlinelen;
+	return pp;
+}
+
+static int decodedata(probeport *p) {
+	/* decode a complete line from the probe port */
+	/* returns number of new data items (1 or 0) */
+	char *l=p->line,*e;
+	double x;
+	
+	//DBG(printf("decodedata:in \"%s\"\n",l);)
+	
+	if (strncmp("# ",l,2)==0) {
+		/* comment */
+		return 0;
+	}
+	if (strncmp("probe ",l,6)==0) {
+		/* line of the form "probe N DDDunit DDDunit..." */
+		l+=6;
+		p->data.probe=strtol(l,&e,0);
+		if (e==l) return 0; /* malformed */
+		l=e+1;
+		
+		p->data.m=measurement_null;
+		while(*l) {
+			/* fix next data string */
+			e=strchr(l,' ');
+			if (e!=NULL) {*e='\0'; e=e+1;}
+			//DBG(printf("decodedata:str \"%s\"\n",l);)
+			x=strtod(l,&l);
+			if (strcmp("hPa", l)==0) {p->data.m.pressure=x; p->data.m.havepressure=1;}
+			if (strcmp("degC",l)==0) {p->data.m.temp    =x; p->data.m.havetemp=1;}
+			if (strcmp("%rh", l)==0) {p->data.m.rh      =x; p->data.m.haverh=1;}
+
+			if (!e) break;
+			l=e;
+		}
+		gettimeofday(&p->data.when,NULL);
+		DBG(printf("decodedata:out %s\n",measurement_string(&p->data.m,1));)
+		return 1;
+	}
+	return 0; /* malformed */
+}
+
+static struct tempdata_s *readmoredata(probeport *p,const char **error) {
+	/* read at least 1 char from probe stream */
+	char *end,*start;
+	ssize_t len;
+	struct tempdata_s *r=NULL;
+	const char *err=NULL;
+	
+	do {
+		start=&p->line[p->current];
+		len=read(p->fd,start,p->max - p->current-1);
+		//DBG(printf("readmoredata: got %zd bytes\n",len);)
+		if (len==-1) {err="bad read"; break;}
+		if (len==0)  {err="no more data"; break;}
+		p->current+=len;
+		p->line[p->current]='\0';
+
+		end=strchr(p->line,'\n');
+		if (!end && p->current+1 >= p->max) {
+			/* implicit '\n' at end of line */
+			end=&p->line[p->current];
+		}
+		if (!end) {err="incomplete data"; break;}
+
+		*end='\0';
+		if (decodedata(p)) r=&p->data;
+		else err="bad data decode";
+		
+		/* eat off decoded data */
+		len=&p->line[p->current] - (end+1);
+		memmove(p->line,end+1,len);
+		p->current=len;
+	} while(0);
+	if (error) *error=err;
+	return r;
 }
 
 static double tvdiff(const struct timeval *end,const struct timeval *start) {
@@ -145,11 +263,10 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 	/* recalculate sum to mitigate rounding errors */
 	if (--p->sumreset <= 0) {
 		p->sumreset=6000;
-		p->sum.temp=0.0;
-		p->sum.rh=0.0;
+		measurementop(&p->sum,'=',&measurement_zero);
+		measurementop(&p->n,'=',&measurement_zero);
 		for_dll(p->list,d) {
-			p->sum.temp+=d->temp;
-			p->sum.rh+=d->rh;
+			measurementop(&p->sum,'+',&d->m);
 		}
 	}
 
@@ -158,9 +275,8 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 		d=dll_tail(p->list);
 		if (tvdiff(&tv,&d->when) < AVGTIME) break;
 		dll_remove(p->list,d);
-		p->sum.temp-=d->temp;
-		p->sum.rh-=d->rh;
-		p->n--;
+		measurementop(&p->sum,'-',&d->m);
+		measurementop(&p->n,'d',&d->m);
 		free(d);
 	}
 
@@ -168,21 +284,18 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 	d=calloc(1,sizeof(*d));
 	if (!d) return;
 	*d=*newdata;
-	p->sum.temp+=d->temp;
-	p->sum.rh+=d->rh;
-	p->n++;
+	measurementop(&p->sum,'+',&d->m);
+	measurementop(&p->n,'i',&d->m);
 	dll_add(p->list,d);
 }
 
-static char *probe_string(struct tempavg_s *p) {
-	static char line[100];
-	if (p->n < 1)
-		snprintf(line,sizeof(line),"? ?");
-	else
-		snprintf(line,sizeof(line),"%.3f %.2f",
-			p->sum.temp/p->n,
-			p->sum.rh/p->n);
-	return line;
+static char *probe_string(struct tempavg_s *p,int u) {
+	measurement avg;
+	
+	if (!p) return measurement_string(NULL,u);
+	avg=p->sum;
+	measurementop(&avg,'/',&p->n);
+	return measurement_string(&avg,u);
 }
 
 static struct tempavg_s *processdata(struct tempavg_s *probe,int *probes,struct tempdata_s *d) {
@@ -196,8 +309,11 @@ static struct tempavg_s *processdata(struct tempavg_s *probe,int *probes,struct 
 			probe[(*probes)++]=tempavg_zero;
 	}
 	combineavg(&probe[d->probe],d);
+	DBG(printf("processdata: %s\n",probe_string(&probe[d->probe],1));)
 	return probe;
 }
+
+/* -- web server stuff -- */
 
 struct serverlist_s {
 	struct serverlist_s *next,*prev;
@@ -225,7 +341,9 @@ static struct serverlist_s *server_new(int socket,struct serverlist_s *sl) {
 	return sl;
 }
 
-static const char *mainloop(int fd,int lfd) {
+/* -- do stuff -- */
+
+static const char *mainloop(int listenfd,probeport *pp) {
 	fd_set readfds,writefds;
 	int maxfd=0;
 	struct tempavg_s *probe=NULL;
@@ -235,16 +353,16 @@ static const char *mainloop(int fd,int lfd) {
 	int tmp;
 	const char *e=NULL;
 	
-	if (fd==-1) return "bad data tty";
-	if (lfd==-1) return "bad listening socket";
+	if (pp->fd==-1) return "bad data tty";
+	if (listenfd==-1) return "bad listening socket";
 	
 	for(;;) {
 		/* set up select() */
 		timeout.tv_sec=AVGTIME;
 		timeout.tv_usec=0;
 		FD_ZERO(&readfds); maxfd=0;
-		FD_SET(fd,&readfds); maxfd=MAX(maxfd,fd);
-		FD_SET(lfd,&readfds); maxfd=MAX(maxfd,lfd);
+		FD_SET(pp->fd,&readfds); maxfd=MAX(maxfd,pp->fd);
+		FD_SET(listenfd,&readfds); maxfd=MAX(maxfd,listenfd);
 		for_dll(serverlist,sl) {
 			switch(sl->state) {
 			case serverlist_reading: FD_SET(sl->socket,&readfds); break;
@@ -259,17 +377,18 @@ static const char *mainloop(int fd,int lfd) {
 		if (tmp==0) continue;
 
 		/* process select() results */
-		if (FD_ISSET(fd,&readfds)) {
-			struct tempavg_s *p=probe;
-			probe=processdata(probe,&probes,readmoredata(fd,&e));
-			if (e) break;
-			if (!probe && p) {e="nomem"; break;}
-		}
-		if (FD_ISSET(lfd,&readfds)) {
+		if (FD_ISSET(listenfd,&readfds)) {
 			int ss;
-			ss=accept(lfd,NULL,NULL);
+			ss=accept(listenfd,NULL,NULL);
 			sl=server_new(ss,NULL);
 			if (sl) dll_add(serverlist,sl);
+		}
+		/* process select()'s probelist */
+		if (FD_ISSET(pp->fd,&readfds)) {
+			struct tempavg_s *p=probe;
+			probe=processdata(probe,&probes,readmoredata(pp,&e));
+			if (e) break;
+			if (!probe && p) {e="nomem"; break;}
 		}
 		/* process select()'s serverlist */
 		for_dll(serverlist,sl) {
@@ -333,7 +452,7 @@ static const char *mainloop(int fd,int lfd) {
 					int i;
 					OUT("%s",header_ok);
 					for(i=0;i<probes;i++) {
-						OUTADD("%d %s\r\n",i,probe_string(&probe[i]));
+						OUTADD("%d %s\r\n",i,probe_string(&probe[i],0));
 					}
 					OUT_OK();
 					break;
@@ -346,22 +465,20 @@ static const char *mainloop(int fd,int lfd) {
 					t=tv.tv_sec;
 					OUT("%s%lld",header_ok,t);
 					for(i=0;i<probes;i++)
-						OUTADD(" %s",probe_string(&probe[i]));
+						OUTADD(" %s",probe_string(&probe[i],0));
 					OUTADD("\r\n");
 					OUT_OK();
 					break;
 				}
 				if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
-					if (tmp<0 || tmp>=probes)
+					if (tmp<0 || tmp>=probes) {
 						OUT("%s",header_bad);
+					}
 					else {
 						struct tempdata_s *d;
 						OUT("%s",header_ok);
 						d=dll_head(probe[tmp].list);
-						if (d)
-							OUTADD("%f degC %f %%rh\r\n",d->temp,d->rh);
-						else
-							OUTADD("? degC ? %%rh\r\n");
+						OUTADD("%s\r\n",measurement_string(&d->m,0));
 						OUT_OK();
 					}
 					break;
@@ -392,26 +509,32 @@ static const char *mainloop(int fd,int lfd) {
 }
 
 int main(int argc,char *argv[]) {
-	int tfd=-1;
 	const char *e=NULL,*e2=NULL;
 	SOCKET s=SOCKET_ERROR;
 	const char *progname;
+	probeport *pp=NULL;
+	const char *probename=TEMPTTY;
+	int port=PORT;
+
+	/* debugging */
+	DBG(probename="testdata";)
+	DBG(port=PORT+1;)
 	
 	progname=*argv++; argc--;
 
 	do {
-		tfd=open(TEMPTTY,O_RDONLY);
-		if (tfd==-1) {e="cannot open"; e2=TEMPTTY; break;}
+		pp=probe_new(probename,100);
+		if (!pp) {e="cannot open"; e2=probename; break;}
 	
 		sock_setreuse(1);
-		s=sock_getsocketto(NULL,-PORT,SOCK_STREAM,&e2);
+		s=sock_getsocketto(NULL,-port,SOCK_STREAM,&e2);
 		if (SOCKINV(s)) {e="cannot create socket"; break;}
 
-		e=mainloop(tfd,sock_tofd(s));
+		e=mainloop(sock_tofd(s),pp);
 		if (e) e2=strerror(errno);
 	} while(0);
 	
-	if (tfd!=-1) close(tfd);
+	if (pp) probe_delete(pp);
 	if (!SOCKINV(s)) sock_close(s);
 	
 	if (e) {

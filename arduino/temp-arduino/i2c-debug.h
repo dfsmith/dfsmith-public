@@ -10,7 +10,7 @@
 #ifndef i2c_debug_h
 #define i2c_debug_h
 
-//#error "Are you sure?"
+//#error "I2C debug code: Are you sure?"
 
 #include <stdio.h>
 
