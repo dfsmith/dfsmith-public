@@ -61,6 +61,12 @@ set ylabel "absolute humidity /g/m^3"
 plot  "daily-ah.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
       ""               using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
 set output
+
+set output "daily-pressure.png"
+set title "Atmospheric pressure range over day"
+set ylabel "atmospheric pressure /hPa"
+plot  "daily-pressure.log" using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage interior"
+set output
 EOF
 }
 
@@ -109,7 +115,7 @@ c6 = 1.80122502
 set style data line
 set grid x
 set grid y
-set yrange [30:100]
+set yrange [20:110]
 set xrange ["$mintime":"$maxtime"]
 
 set terminal png small size 800,600
@@ -119,7 +125,9 @@ plot "$logfile" using (lt(\$1)):(ctof(\$2))     lt 1 lw 6      title     "temper
      ""         using (lt(\$1)):(10*a(\$2,\$3)) lt 1 with line title "abs. humidity /g/10m3 (probe0)",\
      ""         using (lt(\$1)):(ctof(\$4))     lt 2 lw 6      title     "temperature /degF (probe1)",\
      ""         using (lt(\$1)):(\$5)           lt 2 lw 2      title      "rel. humidity /% (probe1)",\
-     ""         using (lt(\$1)):(10*a(\$4,\$5)) lt 2 with line title "abs. humidity /g/10m3 (probe1)"
+     ""         using (lt(\$1)):(10*a(\$4,\$5)) lt 2 with line title "abs. humidity /g/10m3 (probe1)",\
+     ""         using (lt(\$1)):(ctof(\$6))     lt 3 lw 6      title     "temperature /degF (probe2)",\
+     ""         using (lt(\$1)):(\$7-950)       lt 3 lw 2      title  "pressure-950hPa /hPa (probe2)"
 set output
 EOF
 	mv "$plotfile.tmp" "$plotfile"
@@ -138,11 +146,12 @@ dailyprocess() {
 	an2="${ah[1]}"
 	ax2="${ah[3]}"
 	minmax <"$logfile" | {
-		read min tmn tn1 hn1 tn2 hn2
-		read max tmx tx1 hx1 tx2 hx2
-		echo >>"daily-temp.log" "$tmn $tmx $tn1 $tx1 $tn2 $tx2"
-		echo >>"daily-rh.log"   "$tmn $tmx $hn1 $hx1 $hn2 $hx2"
-		echo >>"daily-ah.log"   "$tmn $tmx $an1 $ax1 $an2 $ax2"
+		read min tmn tn1 hn1 tn2 hn2 tn3 pn3 restn
+		read max tmx tx1 hx1 tx2 hx2 tx3 px3 restx
+		echo >>"daily-temp.log"     "$tmn $tmx $tn1 $tx1 $tn2 $tx2"
+		echo >>"daily-rh.log"       "$tmn $tmx $hn1 $hx1 $hn2 $hx2"
+		echo >>"daily-ah.log"       "$tmn $tmx $an1 $ax1 $an2 $ax2"
+		echo >>"daily-pressure.log" "$tmn $tmx $pn3 $px3"
 	}
 }
 

@@ -88,6 +88,7 @@ struct tempavg_s {
 	int sumreset; /* when 0, recalculate sum */
 	measurement sum; /* sum of items in list */
 	measurement n; /* number of items in list */
+	measurement avg; /* cache of mean calculation */
 };
 const struct tempavg_s tempavg_zero={NULL,0,MEASUREMENT_ZERO,MEASUREMENT_ZERO};
 
@@ -119,23 +120,34 @@ static void measurementop(measurement *dest,char op,const measurement *arg) {
 	}
 }
 
+static char *temp_string(const measurement *m,int u) {
+	static char l[20];
+	const char *unit=u?"degC":"";
+	if (!m || !m->havetemp) snprintf(l,sizeof(l),"?%s",unit);
+	else                    snprintf(l,sizeof(l),"%.2f%s",m->temp,unit);
+	return l;
+}
+
+static char *rh_string(const measurement *m,int u) {
+	static char l[20];
+	const char *unit=u?"%rh":"";
+	if (!m || !m->haverh) snprintf(l,sizeof(l),"?%s",unit);
+	else                  snprintf(l,sizeof(l),"%.2f%s",m->rh,unit);
+	return l;
+}
+
+static char *pressure_string(const measurement *m,int u) {
+	static char l[20];
+	const char *unit=u?"hPa":"";
+	if (!m || !m->havepressure) snprintf(l,sizeof(l),"?%s",unit);
+	else                        snprintf(l,sizeof(l),"%.2f%s",m->pressure,unit);
+	return l;
+}
+
 static char *measurement_string(const measurement *m,int u) {
-	static char line[100],*l,*e;
-	l=line;
-	e=&line[sizeof(line)-1];
-
-	if (!m) {
-		if (u) snprintf(l,e-l,"?temp ?humidity ?pressure");
-		else   snprintf(l,e-l,"? ? ?");
-		return line;
-	}
-
-	#define PRINTM(MM,UN,SP) \
-		if (m->have##MM) l+=snprintf(l,e-l,"%f%s%s",m->MM,UN,SP); \
-		else             l+=snprintf(l,e-l,"?%s%s",UN,SP);
-	PRINTM(temp,u?"degC":""," ");
-	PRINTM(rh,u?"%rh":""," ");
-	PRINTM(pressure,u?"hPa":"","");
+	static char line[100];
+	snprintf(line,sizeof(line),"%s %s %s",
+		temp_string(m,u),rh_string(m,u),pressure_string(m,u));
 	return line;
 }
 
@@ -267,6 +279,7 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 		measurementop(&p->n,'=',&measurement_zero);
 		for_dll(p->list,d) {
 			measurementop(&p->sum,'+',&d->m);
+			measurementop(&p->n,'i',&d->m);
 		}
 	}
 
@@ -287,15 +300,10 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 	measurementop(&p->sum,'+',&d->m);
 	measurementop(&p->n,'i',&d->m);
 	dll_add(p->list,d);
-}
-
-static char *probe_string(struct tempavg_s *p,int u) {
-	measurement avg;
 	
-	if (!p) return measurement_string(NULL,u);
-	avg=p->sum;
-	measurementop(&avg,'/',&p->n);
-	return measurement_string(&avg,u);
+	/* calculate mean */
+	p->avg=p->sum;
+	measurementop(&p->avg,'/',&p->n);
 }
 
 static struct tempavg_s *processdata(struct tempavg_s *probe,int *probes,struct tempdata_s *d) {
@@ -309,7 +317,7 @@ static struct tempavg_s *processdata(struct tempavg_s *probe,int *probes,struct 
 			probe[(*probes)++]=tempavg_zero;
 	}
 	combineavg(&probe[d->probe],d);
-	DBG(printf("processdata: %s\n",probe_string(&probe[d->probe],1));)
+	DBG(printf("processdata: %s\n",measurement_string(&probe[d->probe].avg,1));)
 	return probe;
 }
 
@@ -452,7 +460,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 					int i;
 					OUT("%s",header_ok);
 					for(i=0;i<probes;i++) {
-						OUTADD("%d %s\r\n",i,probe_string(&probe[i],0));
+						OUTADD("%d %s\r\n",i,measurement_string(&probe[i].avg,0));
 					}
 					OUT_OK();
 					break;
@@ -465,10 +473,30 @@ static const char *mainloop(int listenfd,probeport *pp) {
 					t=tv.tv_sec;
 					OUT("%s%lld",header_ok,t);
 					for(i=0;i<probes;i++)
-						OUTADD(" %s",probe_string(&probe[i],0));
+						OUTADD(" %s",measurement_string(&probe[i].avg,0));
 					OUTADD("\r\n");
 					OUT_OK();
 					break;
+				}
+				if (strcmp(sl->uri,"/measurementlines")==0) {
+					int i;
+					double t;
+					struct timeval tv;
+					
+					gettimeofday(&tv,NULL);
+					t=tv.tv_sec;
+					t+=tv.tv_usec * 1e-6;
+					OUT("%s%.1f",header_ok,t);
+					
+					#define ULINE(UN,CONV) \
+						OUTADD("\n%s",UN); \
+						for(i=0;i<probes;i++) \
+							OUTADD(" %s",CONV(&probe[i].avg,0));
+					ULINE("degC",temp_string);
+					ULINE("%rh",rh_string);
+					ULINE("hPa",pressure_string);
+					OUTADD("\n");
+					OUT_OK();
 				}
 				if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
 					if (tmp<0 || tmp>=probes) {
