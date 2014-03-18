@@ -4,7 +4,18 @@ cd "/home/dfsmith/public_html/sensors"
 export PATH="$PATH:/home/dfsmith/bin"
 
 gettempline() {
+	# returns sensor data in the form
+	# time temp1 rh1 temp2 rh2...
 	curl -s http://localhost:8888/probeline
+}
+
+getsensorlines() {
+	# returns sensor data in the form
+	# seconds: time
+	# degC: temp1 temp2...
+	# %rh: rh1 rh2...
+	# hPa: pressure1 pressure2...
+	curl -s http://localhost:8888/measurementlines
 }
 
 getstarttime() {
@@ -33,6 +44,7 @@ plotlongterm() {
 set timefmt "%s"
 set xdata time
 set format x "%F"
+set grid y
 set xtics rotate by -30
 ctof(t)=32+1.8*t
 lt(x)=x+($tz)
@@ -155,9 +167,9 @@ dailyprocess() {
 	}
 }
 
-# start of script
+# start of main script
 
-if [ "$1" != "" ]; then
+if [ "$1" != "" -a "$2" != "" ]; then
 	# just plot existing named logfile
 	plotfile "$1" "$2"
 	exit

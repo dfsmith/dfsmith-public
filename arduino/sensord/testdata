@@ -1,11 +1,13 @@
 probe 0 12.1degC 43.2%rh
 probe 0 13.2degC 43.2%rh
 probe 0 14.3degC 43.2%rh
+probe 1 13degC 43.2%rh
 probe 0 13.4degC 43.2%rh
 probe 0 13.5degC 43.2%rh
+probe 2 14degC 993hPa
 probe 0 12.6degC 43.2%rh
+probe 1 13degC 43.2%rh
 probe 0 12degC 43.2%rh
-probe 1 13degC 43.2%rh
 probe 0 14degC 43.2%rh
 probe 1 13degC 43.2%rh
 probe 0 14degC 43.2%rh
@@ -23,11 +25,11 @@ probe 0 14degC 43.2%rh
 probe 0 14degC 43.2%rh
 probe 0 14degC 43.2%rh
 probe 0 14degC 43.2%rh
-probe 0 14degC 43.2%rh 993hPa
+probe 2 14degC 993hPa
 probe 0 14degC 43.2%rh
 probe 0 15degC 43.2%rh
 probe 0 14.4degC 43.2%rh
 probe 0 14.3degC 43.2%rh
-probe 0 14.2degC 43.2%rh 1000hPa
+probe 2 14.2degC 1000hPa
 probe 0 14.1degC 43.2%rh
 probe 0 14.0degC 43.2%rh
