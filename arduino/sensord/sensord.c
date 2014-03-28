@@ -15,7 +15,7 @@
 #include "socklib.h"
 
 #define TRACE(x)
-#define DBG(x) x
+#define DBG(x)
 
 #define TEMPTTY "/dev/arduinotty"
 //#define TEMPTTY "testdata"
@@ -66,14 +66,17 @@ const char header_notfound[]="HTTP/1.1 404 Not found\r\n\r\n";
 
 typedef struct {
 	double temp;
-	double rh;
+	double rh;	
 	double pressure;
+	double state;
+	
 	uint havetemp:1;
 	uint haverh:1;
 	uint havepressure:1;
+	uint havestate:1;
 } measurement;
-#define MEASUREMENT_ZERO {0.0,0.0,0.0, 1,1,1}
-const measurement measurement_null={0.0,0.0,0.0, 0,0,0};
+#define MEASUREMENT_ZERO {0.0,0.0,0.0,0.0, 1,1,1,1}
+const measurement measurement_null={0.0,0.0,0.0,0.0, 0,0,0,0};
 const measurement measurement_zero=MEASUREMENT_ZERO;
 
 struct tempdata_s {
@@ -99,13 +102,14 @@ typedef struct {
 	int current;
 	int max;
 	struct tempdata_s data;
+	uint complete:1;
 } probeport;
 
 static void measurementop(measurement *dest,char op,const measurement *arg) {
 	#define DIVOP(READING,OP) do{if (arg->have##READING && arg->READING!=0.0) {dest->READING /= arg->READING;} else {dest->have##READING=0;}}while(0)
 	#define UNIOP(READING,OP) do{if (arg->have##READING) {dest->READING OP;}}while(0)
 	#define REGOP(READING,OP) do{if (arg->have##READING) {dest->READING OP arg->READING;}}while(0)
-	#define DOOPS(DOOP,OP) do{DOOP(temp,OP); DOOP(rh,OP); DOOP(pressure,OP);}while(0)
+	#define DOOPS(DOOP,OP) do{DOOP(temp,OP); DOOP(rh,OP); DOOP(pressure,OP); DOOP(state,OP);}while(0)
 	switch(op) {
 	case '=':
 		*dest=*arg;
@@ -144,10 +148,21 @@ static char *pressure_string(const measurement *m,int u) {
 	return l;
 }
 
+static char *state_string(const measurement *m,int u) {
+	static char l[20];
+	const char *unit=u?"state":"";
+	if (!m || !m->havestate) snprintf(l,sizeof(l),"?%s",unit);
+	else                     snprintf(l,sizeof(l),"%.1f%s",m->state,unit);
+	return l;
+}
+
 static char *measurement_string(const measurement *m,int u) {
 	static char line[100];
-	snprintf(line,sizeof(line),"%s %s %s",
-		temp_string(m,u),rh_string(m,u),pressure_string(m,u));
+	snprintf(line,sizeof(line),"%s %s %s %s",
+		temp_string(m,u),
+		rh_string(m,u),
+		pressure_string(m,u),
+		state_string(m,u));
 	return line;
 }
 
@@ -178,19 +193,20 @@ static probeport *probe_new(const char *probename,int maxlinelen) {
 	pp->line=(char*)(pp+1);
 	pp->current=0;
 	pp->max=maxlinelen;
+	pp->complete=0; /* may start with incomplete line */
 	return pp;
 }
 
 static int decodedata(probeport *p) {
 	/* decode a complete line from the probe port */
-	/* returns number of new data items (1 or 0) */
+	/* returns number of new data items (1 or 0) or error (-1) */
 	char *l=p->line,*e;
 	double x;
 	
 	//DBG(printf("decodedata:in \"%s\"\n",l);)
 	
 	if (strncmp("# ",l,2)==0) {
-		/* comment */
+		/* comment line */
 		return 0;
 	}
 	if (strncmp("probe ",l,6)==0) {
@@ -207,9 +223,11 @@ static int decodedata(probeport *p) {
 			if (e!=NULL) {*e='\0'; e=e+1;}
 			//DBG(printf("decodedata:str \"%s\"\n",l);)
 			x=strtod(l,&l);
-			if (strcmp("hPa", l)==0) {p->data.m.pressure=x; p->data.m.havepressure=1;}
-			if (strcmp("degC",l)==0) {p->data.m.temp    =x; p->data.m.havetemp=1;}
-			if (strcmp("%rh", l)==0) {p->data.m.rh      =x; p->data.m.haverh=1;}
+			#define SETM(T,V) do {p->data.m.T=V; p->data.m.have##T=1;} while(0)
+			if (strcmp("hPa",  l)==0) SETM(pressure,x);
+			if (strcmp("degC", l)==0) SETM(temp,x);
+			if (strcmp("%rh",  l)==0) SETM(rh,x);
+			if (strcmp("state",l)==0) SETM(state,x);
 
 			if (!e) break;
 			l=e;
@@ -218,7 +236,7 @@ static int decodedata(probeport *p) {
 		DBG(printf("decodedata:out %s\n",measurement_string(&p->data.m,1));)
 		return 1;
 	}
-	return 0; /* malformed */
+	return -1; /* malformed line */
 }
 
 static struct tempdata_s *readmoredata(probeport *p,const char **error) {
@@ -245,9 +263,13 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 		if (!end) {err="incomplete data"; break;}
 
 		*end='\0';
-		if (decodedata(p)) r=&p->data;
-		else err="bad data decode";
-		
+		switch(decodedata(p)) {
+		case 1:	r=&p->data; break;
+		case 0: break;
+		default: if (p->complete) err="bad data decode"; break;
+		}
+		p->complete=1;
+
 		/* eat off decoded data */
 		len=&p->line[p->current] - (end+1);
 		memmove(p->line,end+1,len);
@@ -482,7 +504,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 				}
 				TRACE(printf("SENDING: %s\n",sl->uri);)
 				if (strcmp(sl->uri,"/")==0) {
-					OUT("%s# temperature server\r\n# probeline probe degC %%rh\r\n",header_ok);
+					OUT("%s# temperature server\r\n# probeline probe degC %%rh state\r\n",header_ok);
 					OUT_OK();
 					break;
 				}
@@ -524,8 +546,9 @@ static const char *mainloop(int listenfd,probeport *pp) {
 						for(i=0;i<probes;i++) \
 							OUTADD(" %s",CONV(&probe[i].avg,0));
 					ULINE("degC",temp_string);
-					ULINE("%%rh",rh_string);
+					ULINE("%rh",rh_string);
 					ULINE("hPa",pressure_string);
+					ULINE("state",state_string);
 					OUTADD("\n");
 					OUT_OK();
 					break;
