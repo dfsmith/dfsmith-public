@@ -1,0 +1,204 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-US" lang="en-US" dir="ltr">
+<head>
+<title>Current sensor data</title>
+<script language="javascript" type="text/javascript">
+<!--
+var rq=new XMLHttpRequest();
+var el_box;
+// Array by probes, each containing associative array of "unit":element
+var displayfields=new Array();
+
+const alpha=6.112;
+const beta=17.62;
+const lambda=243.12;
+
+function tempexp(degc) {
+	return Math.exp(beta*degc/(lambda+degc));
+}
+
+function ctof(degc) {
+	return 32.0+1.8*degc;
+}
+
+function rhtoah(rh,degC) {
+	var c=parseFloat(degC);
+	var h=parseFloat(rh);
+	return 216.7 * 0.01*h * alpha * tempexp(c) / (c+271.15);
+}
+
+function rhtorh37(rh,degC) {
+	var c=parseFloat(degC);
+	var h=parseFloat(rh);
+	return h * tempexp(c) / tempexp(37.0);
+}
+
+function setfontsize() {
+	if (!el_box) {return;}
+	var size=0.08*el_box.clientWidth;
+	el_box.style.fontSize=size.toString()+"px";
+}
+
+function displaydata() {
+	if (rq.readyState!=4) {return;}
+	if (rq.status!=200) {return;}
+
+	var line=rq.responseText.trim().split("\n");
+	var data=new Object(); // associative data['units']={ "0.1", "0.2", "?", ...}
+	for(var l in line) {
+		linedata=line[l].trim().split(":");
+		if (!linedata[0]) {continue;}
+		data[linedata[0].replace("%","")]=linedata[1].trim().split(" ");
+	}
+	
+	var res;
+	for(var p in displayfields) { // array of probes 0, 1, 2,...
+		for(var unit in displayfields[p]) {
+			switch(unit) {
+			case "rh":
+				res=data.rh[p] + "%rh";
+				break;
+			case "ah":
+				res=rhtoah(data.rh[p],data.degC[p]).toFixed(3) + "g/m<sup>3</sup>";
+				break;
+			case "rh37":
+				res=rhtorh37(data.rh[p],data.degC[p]).toFixed(1) + "%rh @ 98.6&deg;F";
+				break;
+			case "degF":
+				res=ctof(data.degC[p]).toFixed(2) + "&deg;F";
+				break;
+			case "degC":
+				res=data.degC[p] + "&deg;C";
+				break;
+			default:
+				if (data[unit]) {
+					res=data[unit][p] + unit;
+				}
+				else {
+					res="no "+unit+" data";
+				}
+				break;
+			}
+			displayfields[p][unit].innerHTML=res;
+		}
+	}
+	setTimeout("getdata()",1000);
+}
+
+function getdata() {
+	if (!window.XMLHttpRequest) {return;}
+	rq.onreadystatechange=displaydata;
+	rq.open("GET","http://www.dfsmith.net:8888/measurementlines");
+	rq.send();
+}		
+	
+function runpage() {
+	el_box=document.getElementById("sensorbox");
+	window.onresize=setfontsize;
+	setfontsize();
+	
+	for(var i=0;;i++) {
+		var el=document.getElementById("probe"+i);
+		if (!el) {break;}
+		var spans=el.getElementsByTagName("span");
+		displayfields[i]=new Object();
+		for(var f=0;f<spans.length;f++) {
+			displayfields[i][spans[f].className]=spans[f];
+		}
+	}
+	getdata();
+}
+-->
+</script>
+<style>
+.databox {
+	float: left;
+	background: #EEE;
+	padding: 1%;
+	margin: 2%;
+	width: 44%;
+}
+.auxdata {
+	margin-top: 0%;
+	padding-top: 0%;
+	font-size: 40%;
+	text-align: right;
+}
+.probetitle {
+	clear: both;
+	padding-top: 1%;
+	padding-bottom: 1%;
+	padding-left: 3%;
+	padding-right: 3%;
+	width: 94%;
+	font-size: 50%;
+	color: #CCC;
+	background-color: #575;
+	font-weight: bold;
+}
+.sensorbox {
+	width: 100%;
+}
+</style>
+</head>
+
+<body onload="runpage()">
+<div class="sensorbox" id="sensorbox">
+
+<div class="probe" id="probe0">
+	<div class="probetitle">Garage box</div>
+
+	<div class="databox">
+		<span class="degF">temp</span>
+		<div class="auxdata"><span class="degC">temp</span></div>
+	</div>
+
+	<div class="databox">
+		<span class="rh">rh</span>
+		<div class="auxdata"><span class="rh37">rh37</span></div>
+		<div class="auxdata"><span class="ah">ah</span></div>
+	</div>
+</div>
+
+
+<div class="probe" id="probe1">
+	<div class="probetitle">Garage outside</div>
+
+	<div class="databox">
+		<span class="degF">temp</span>
+		<div class="auxdata"><span class="degC">temp</span></div>
+	</div>
+
+	<div class="databox">
+		<span class="rh">rh</span>
+		<div class="auxdata"><span class="rh37">rh37</span></div>
+		<div class="auxdata"><span class="ah">ah</span></div>
+	</div>
+</div>
+
+
+<div class="probe" id="probe2">
+	<div class="probetitle">Garage inside</div>
+
+	<div class="databox">
+		<span class="degF">temp1</span>
+		<div class="auxdata"><span class="degC">temp1</span></div>
+	</div>
+
+	<div class="databox">
+		<span class="hPa">pressure</span>
+	</div>
+</div>
+
+<div class="probe" id="probe3">
+	<div class="probetitle">Garage door</div>
+
+	<div class="databox">
+		<span class="state">state</span>
+	</div>
+</div>
+
+</div>
+</body>
+
+</html>

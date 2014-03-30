@@ -32,6 +32,18 @@ getdate() {
 	date "+%Y/%m/%d" -d@$1
 }
 
+makelogfiledir() {
+	# print time, from s since epoch, to YYYY/MM/DD
+	# create directory YYYY/MM
+	if [ $(( 10#0$1 )) -lt 1 ]; then
+		exit
+	fi
+	DATE=`getdate $1`
+	date="${DATE%/*}" # YYYY/MM/DD -> YYYY/MM
+	mkdir -p "$date"
+	echo "$DATE"
+}
+
 gettz() {
 	IFS=:
 	declare -a hhmm
@@ -40,10 +52,14 @@ gettz() {
 }
 
 plotlongterm() {
+	# plot from 1Jan2014 to current
+	tz=`gettz`
 	nice gnuplot <<EOF 1>&2
-set timefmt "%s"
 set xdata time
 set format x "%F"
+set timefmt "%Y-%m-%d"
+set xrange ["2014-01-01":*]
+set timefmt "%s"
 set grid y
 set xtics rotate by -30
 ctof(t)=32+1.8*t
@@ -175,15 +191,13 @@ if [ "$1" != "" -a "$2" != "" ]; then
 	exit
 fi
 
+# old scheme
+
 TEMPLINE=`gettempline`
 set -- $TEMPLINE
-if [ $(( 10#0$1 )) -lt 1 ]; then
-	exit
-fi
-DATE=`getdate $1`
-mkdir -p "$DATE"
-rmdir "$DATE"
-LOGFILE="${DATE}-tth.log"
+LOGFILEPRE=`makelogfiledir $1`
+if [ "$LOGFILEPRE" = "" ]; then exit; fi
+LOGFILE="${LOGFILEPRE}-tth.log"
 
 if [ -f "$LOGFILE" ]; then
 	# file exists: append and plot
@@ -206,3 +220,42 @@ else
 fi
 
 plotfile "$LOGFILE" today.png lazy
+
+# new scheme
+
+getsensorlines | ( 
+	read sunit seconds
+	if [ "$sunit" != "seconds:" ]; then exit; fi
+	LOGFILEPRE=`makelogfiledir ${seconds%.*}`
+	if [ "$LOGFILEPRE" = "" ]; then exit; fi
+	replot=""
+	while read unitcolon values; do
+		unit="${unitcolon%:}"
+		LOGFILE="${LOGFILEPRE}-$unit.log"
+		if [ ! -f "$LOGFILE" ]; then
+			# start new logfile
+			echo >>"$LOGFILE" "# tm_sec $unit"
+			echo >>"$LOGFILE" "# $LOGFILEPRE"
+			
+			# rotate old log file
+			OLDLOGFILE=`readlink today-$unit.log`
+			ln -sf "$LOGFILE" "today-$unit.log"
+			
+			if [ "$OLDLOGFILE" != "" ]; then
+				ln -sf "$OLDLOGFILE" "yesterday-$unit.log"
+				replot="$replot ${OLDLOGFILE%-*}"
+			fi
+		fi
+		echo >>"$LOGFILE" "$seconds $values"
+	done
+	
+	lastd=""
+	for date in $replot; do
+		if [ "$date" = "$lastd" ]; then continue; fi
+		plotdate $date
+		lastd="$date"
+	done
+	if [ "$replot" != "" ]; then
+		plotlongterm
+	fi
+)

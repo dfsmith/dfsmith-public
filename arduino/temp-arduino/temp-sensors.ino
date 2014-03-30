@@ -86,7 +86,7 @@ static probedata probe[]={
 	{"garage box",    0,shtinit,shtgetreading,{A5,A4,200,1,0}},
 	{"garage outside",1,shtinit,shtgetreading,{A2,A3,200,1,0}},
 	{"garage inside", 2,bmpinit,bmpgetreading,{ 2, 3,200,0,0}},
-	{"garage door",   3,switch_pd_init,switch_pd_getreading,{5}},
+	{"garage door",   3,switch_pd_init,switch_pd_getreading,{4}},
 };
 #define PROBES (sizeof(probe)/sizeof(*probe))
 

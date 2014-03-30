@@ -488,12 +488,14 @@ static const char *mainloop(int listenfd,probeport *pp) {
 					if (sl->buflen < sizeof(sl->buf)) \
 						sl->buflen+=snprintf(sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen,__VA_ARGS__); \
 					} while(0)
-				#define OUT_OK() \
-					HEADER_OK_SET_CONTENTLENGTH(sl->buf,sl->buflen-sizeof(header_ok)+1);
+				#define OUT_OK() do { \
+						HEADER_OK_SET_CONTENTLENGTH(sl->buf,sl->buflen-sizeof(header_ok)+1); \
+						sl->state=server_writing; \
+					} while(0)
+				#define OUT_NOK() (sl->state=server_writinglast)
 				#define OUT(...) do { \
 						sl->buflen=0; \
 						OUTADD(__VA_ARGS__); \
-						sl->state=server_writing; \
 					} while(0)
 
 				/* buf must start with requst-line */
@@ -556,6 +558,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 				if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
 					if (tmp<0 || tmp>=probes) {
 						OUT("%s",header_bad);
+						OUT_NOK();
 					}
 					else {
 						struct tempdata_s *d;
@@ -568,7 +571,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 				}
 				/* otherwise... */
 				OUT("%s",header_notfound);
-				sl->state=server_writinglast;
+				OUT_NOK();
 				break;
 			case server_reset:
 				sl=server_new(-1,sl);
