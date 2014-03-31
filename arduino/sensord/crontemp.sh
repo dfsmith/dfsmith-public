@@ -72,28 +72,29 @@ set terminal png truecolor enhanced font "palatino,12" size 800,600
 set output "daily-temp.png"
 set title "Temperature range over day"
 set ylabel "temperature /{/Symbol \260}F"
-plot  "daily-temp.log" using (lt(\$1)):(ctof(\$3)):(lt(\$1)):(lt(\$2)):(ctof(\$3)):(ctof(\$4)) lt rgbcolor "cyan"    title "Garage box",\
-      ""               using (lt(\$1)):(ctof(\$5)):(lt(\$1)):(lt(\$2)):(ctof(\$5)):(ctof(\$6)) lt rgbcolor "magenta" title "Garage outside"
+plot  "minmax-degC.log" using (lt(\$1)):(ctof(\$3)):(lt(\$1)):(lt(\$2)):(ctof(\$3)):(ctof(\$4)) lt rgbcolor "cyan"    title "Garage box",\
+      ""                using (lt(\$1)):(ctof(\$5)):(lt(\$1)):(lt(\$2)):(ctof(\$5)):(ctof(\$6)) lt rgbcolor "magenta" title "Garage outside",\
+      ""                using (lt(\$1)):(ctof(\$7)):(lt(\$1)):(lt(\$2)):(ctof(\$7)):(ctof(\$8)) lt rgbcolor "yellow"  title "Garage interior"
 set output
 
 set output "daily-rh.png"
 set title "Relative humidity range over day"
 set ylabel "relative humidity /%"
-plot  "daily-rh.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
-      ""               using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
+plot  "minmax-%rh.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
+      ""                 using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
 set output
 
 set output "daily-ah.png"
 set title "Absolute humidity range over day"
 set ylabel "absolute humidity /g/m^3"
-plot  "daily-ah.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
-      ""               using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
+plot  "minmax-ah.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
+      ""                using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
 set output
 
 set output "daily-pressure.png"
 set title "Atmospheric pressure range over day"
 set ylabel "atmospheric pressure /hPa"
-plot  "daily-pressure.log" using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage interior"
+plot  "minmax-hPa.log" using (lt(\$1)):7:(lt(\$1)):(lt(\$2)):7:8 lt rgbcolor "cyan"    title "Garage interior"
 set output
 EOF
 }
@@ -228,7 +229,7 @@ getsensorlines | (
 	if [ "$sunit" != "seconds:" ]; then exit; fi
 	LOGFILEPRE=`makelogfiledir ${seconds%.*}`
 	if [ "$LOGFILEPRE" = "" ]; then exit; fi
-	replot=""
+	declare -A replot
 	while read unitcolon values; do
 		unit="${unitcolon%:}"
 		LOGFILE="${LOGFILEPRE}-$unit.log"
@@ -243,19 +244,32 @@ getsensorlines | (
 			
 			if [ "$OLDLOGFILE" != "" ]; then
 				ln -sf "$OLDLOGFILE" "yesterday-$unit.log"
-				replot="$replot ${OLDLOGFILE%-*}"
+				replot[${OLDLOGFILE%-*}]="1"
+				minmax -s <"$OLDLOGFILE" >>"minmax-$unit.log"
 			fi
 		fi
 		echo >>"$LOGFILE" "$seconds $values"
 	done
-	
-	lastd=""
-	for date in $replot; do
-		if [ "$date" = "$lastd" ]; then continue; fi
-		plotdate $date
-		lastd="$date"
+
+	# special case for minmax-ah.log
+	for date in ${!replot[@]}; do
+		# assume degC and %rh files are line synchronized
+		while read t1 h1 h2 rest <&3 && read t2 c1 c2 rest <&4; do
+			if [ "$t1" = "#" -o "$t2" = "#" ]; then continue; fi
+			#if [ "$t1" != "$t2" ]; then continue; fi # small discrepancy tolerable (!)
+			if [ "$h1" != "" -a "$c1" != "" ]; then a1=`rhtoah $h1 $c1`; else a1="?"; fi
+			if [ "$h2" != "" -a "$c2" != "" ]; then a2=`rhtoah $h2 $c2`; else a2="?"; fi
+			echo "$t1 $a1 $a2"
+		done 3<${date}-%rh.log 4<${date}-degC.log | minmax -s >>minmax-ah.log
 	done
+	
+	# build daily minmax charts
 	if [ "$replot" != "" ]; then
 		plotlongterm
 	fi
+
+	# build complete charts for finalized day(s)
+	for date in ${!replot[@]}; do
+		plotdate $date
+	done
 )
