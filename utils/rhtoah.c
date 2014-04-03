@@ -2,8 +2,9 @@
 #include <stdlib.h>
 #include <math.h>
 
-double rhtoah(int rev,double rhpc,double degC) {
-	/* rev to reverse arguments (horrible hack) */
+#define SWAP(t,x,y) {t z; z=(x); (x)=(y); (y)=z;}
+
+static double rhtoah(double rhpc,double degC) {
 	/* rhpc is relative humidity, in percent */
 	/* degC is the temperature in degrees Celsius */
 	const double c=2.16679;
@@ -18,8 +19,7 @@ double rhtoah(int rev,double rhpc,double degC) {
 	const double c6=1.80122502;
 	double pw,pws,K,eta,coeff;
 	
-	if (!rev) {K=degC+tt; }
-	else      {K=rhpc+tt; rhpc=degC;}
+	K=degC+tt;
 	eta=1.0-(K/tc);
 	coeff =c1*eta;
 	coeff+=c2*pow(eta,1.5);
@@ -45,9 +45,20 @@ int main(int argc,char *argv[]) {
 		rev=1;
 	}
 	while(argc>=2) {
-		rh=strtod(*argv++,NULL); argc--;
-		degC=strtod(*argv++,NULL); argc--;
-		printf("%f\n",rhtoah(rev,rh,degC));
+		int ok=0;
+		do {
+			char *e,*s;
+			s=*(argv++); argc--;   rh=strtod(s,&e); if (e==s) break;
+			s=*(argv++); argc--; degC=strtod(s,&e); if (e==s) break;
+			if (rev) SWAP(double,rh,degC);
+			ok=1;
+		} while(0);
+		if (ok)
+			printf("%f\n",rhtoah(rh,degC));
+		else {
+			printf("?\n");
+			return 0;
+		}
 		in=NULL;
 	}
 	if (argc>0) {
@@ -57,8 +68,12 @@ int main(int argc,char *argv[]) {
 	if (!in) return 0;
 	
 	while(fgets(line,sizeof(line),in)) {
-		if (sscanf(line,"%lf %lf",&rh,&degC)!=2) continue;
-		printf("%f\n",rhtoah(rev,rh,degC));
+		if (sscanf(line,"%lf %lf",&rh,&degC)!=2)
+			printf("?\n");
+		else {
+			if (rev) SWAP(double,rh,degC);
+			printf("%f\n",rhtoah(rh,degC));
+		}
 	}
 	fclose(in);
 	return 0;

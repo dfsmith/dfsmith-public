@@ -18,11 +18,30 @@ getsensorlines() {
 	curl -s http://localhost:8888/measurementlines
 }
 
+addah() {
+	# add a virtual absolute humidity line to the results
+	declare -a degc rh
+	while read unit values; do
+		case $unit in
+		degC:)    degc=( $values );;
+		%rh:)     rh=( $values );;
+		esac
+		echo "$unit $values"
+	done
+	n=${#degc[@]}
+	if [ $n -lt 1 ]; then return; fi
+	echo -n "ah:"
+	for((c=0; c<n; c++)); do
+		echo -n " $(rhtoah ${rh[$c]} ${degc[$c]})"
+	done
+	echo
+}
+
 getstarttime() {
 	# return the starting time from the logfile
 	( while read secs rest; do
 		if [ "${secs:0:1}" != "#" ]; then
-			echo $secs
+			echo "${secs%.*}"
 			break
 		fi
 	done ) <"$1"
@@ -51,9 +70,18 @@ gettz() {
 	echo "$(( ( ${hhmm[0]:0:1}1 * 10#${hhmm[0]:1}*60 + 10#${hhmm[1]} ) * 60 ))"
 }
 
+boxxy() {
+	# gnuplot boxxyerrorbars helper
+	echo "(lt(\$1)):($1):(lt(\$1)):(lt(\$2)):($1):($2)"
+}
+
 plotlongterm() {
 	# plot from 1Jan2014 to current
 	tz=`gettz`
+	col1='lt rgbcolor "cyan"'
+	col2='lt rgbcolor "magenta"'
+	col3='lt rgbcolor "yellow"'
+	
 	nice gnuplot <<EOF 1>&2
 set xdata time
 set format x "%F"
@@ -72,50 +100,50 @@ set terminal png truecolor enhanced font "palatino,12" size 800,600
 set output "daily-temp.png"
 set title "Temperature range over day"
 set ylabel "temperature /{/Symbol \260}F"
-plot  "minmax-degC.log" using (lt(\$1)):(ctof(\$3)):(lt(\$1)):(lt(\$2)):(ctof(\$3)):(ctof(\$4)) lt rgbcolor "cyan"    title "Garage box",\
-      ""                using (lt(\$1)):(ctof(\$5)):(lt(\$1)):(lt(\$2)):(ctof(\$5)):(ctof(\$6)) lt rgbcolor "magenta" title "Garage outside",\
-      ""                using (lt(\$1)):(ctof(\$7)):(lt(\$1)):(lt(\$2)):(ctof(\$7)):(ctof(\$8)) lt rgbcolor "yellow"  title "Garage interior"
+plot  "minmax-degC.log" using $(boxxy 'ctof($3)' 'ctof($4)') $col1 title "Garage box",\
+      ""                using $(boxxy 'ctof($5)' 'ctof($6)') $col2 title "Garage outside",\
+      ""                using $(boxxy 'ctof($7)' 'ctof($8)') $col3 title "Garage interior"
 set output
 
 set output "daily-rh.png"
 set title "Relative humidity range over day"
 set ylabel "relative humidity /%"
-plot  "minmax-%rh.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
-      ""                 using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
+plot  "minmax-%rh.log"   using $(boxxy '$3' '$4') $col1 title "Garage box",\
+      ""                 using $(boxxy '$5' '$6') $col2 title "Garage outside"
 set output
 
 set output "daily-ah.png"
 set title "Absolute humidity range over day"
 set ylabel "absolute humidity /g/m^3"
-plot  "minmax-ah.log"   using (lt(\$1)):3:(lt(\$1)):(lt(\$2)):3:4 lt rgbcolor "cyan"    title "Garage box",\
-      ""                using (lt(\$1)):5:(lt(\$1)):(lt(\$2)):5:6 lt rgbcolor "magenta" title "Garage outside"
+plot  "minmax-ah.log"   using $(boxxy '$3' '$4') $col1 title "Garage box",\
+      ""                using $(boxxy '$5' '$6') $col2 title "Garage outside"
 set output
 
 set output "daily-pressure.png"
 set title "Atmospheric pressure range over day"
 set ylabel "atmospheric pressure /hPa"
-plot  "minmax-hPa.log" using (lt(\$1)):7:(lt(\$1)):(lt(\$2)):7:8 lt rgbcolor "cyan"    title "Garage interior"
+plot  "minmax-hPa.log" using $(boxxy '$7' '$8') $col1 title "Garage interior"
 set output
 EOF
 }
 
-plotfile() {
-	logfile="$1"
+plotdate() {
+	date="$1"
 	linkto="$2"
-	lazy="$3"
-	plotfile="${logfile%%.log}.png"
+	lazyfile="${date}-$3.log"
+	plotfile="${date}.png"
 
-	if [ "$lazy" != "" -a -f "$plotfile" ]; then
-		logage=`stat -c %Z "$logfile"`
-		plotage=`stat -c %Z "$plotfile"`
-		if [ $(( $logage - $plotage )) -lt 120 ]; then
+	if [ -f "$lazyfile" -a -f "$plotfile" ]; then
+		lazyage=`stat -c %Z "${lazyfile}"`
+		plotage=`stat -c %Z "${plotfile}"`
+		if [ $(( $lazyage - $plotage )) -lt 120 ]; then
 			# less than 5 minutes old: skip plotting
 			return
 		fi
 	fi
 
 	tz=`gettz`
-	mintime=$(( `getstarttime $logfile` + $tz ))
+	mintime=$(( `getstarttime "${date}-degC.log"` + $tz ))
 	maxtime=$(( $mintime + 24*60*60 ))
 	
 	nice gnuplot <<EOF 1>&2
@@ -149,20 +177,32 @@ set xrange ["$mintime":"$maxtime"]
 
 set terminal png small size 800,600
 set output "$plotfile.tmp"
-plot "$logfile" using (lt(\$1)):(ctof(\$2))     lt 1 lw 6      title     "temperature /degF (probe0)",\
-     ""         using (lt(\$1)):(\$3)           lt 1 lw 2      title      "rel. humidity /% (probe0)",\
-     ""         using (lt(\$1)):(10*a(\$2,\$3)) lt 1 with line title "abs. humidity /g/10m3 (probe0)",\
-     ""         using (lt(\$1)):(ctof(\$4))     lt 2 lw 6      title     "temperature /degF (probe1)",\
-     ""         using (lt(\$1)):(\$5)           lt 2 lw 2      title      "rel. humidity /% (probe1)",\
-     ""         using (lt(\$1)):(10*a(\$4,\$5)) lt 2 with line title "abs. humidity /g/10m3 (probe1)",\
-     ""         using (lt(\$1)):(ctof(\$6))     lt 3 lw 6      title     "temperature /degF (probe2)",\
-     ""         using (lt(\$1)):(\$7-950)       lt 3 lw 2      title  "pressure-950hPa /hPa (probe2)"
+plot "${date}-degC.log" using (lt(\$1)):(ctof(\$2)) lt 1 lw 6      title     "temperature /degF (probe0)",\
+     "${date}-%rh.log"  using (lt(\$1)):(\$2)       lt 1 lw 2      title      "rel. humidity /% (probe0)",\
+     "${date}-ah.log"   using (lt(\$1)):(10*\$2)    lt 1 with line title "abs. humidity /g/10m3 (probe0)",\
+     "${date}-degC.log" using (lt(\$1)):(ctof(\$3)) lt 2 lw 6      title     "temperature /degF (probe1)",\
+     "${date}-%rh.log"  using (lt(\$1)):(\$3)       lt 2 lw 2      title      "rel. humidity /% (probe1)",\
+     "${date}-ah.log"   using (lt(\$1)):(10*\$3)    lt 2 with line title "abs. humidity /g/10m3 (probe1)",\
+     "${date}-degC.log" using (lt(\$1)):(ctof(\$4)) lt 3 lw 6      title     "temperature /degF (probe2)",\
+     "${date}-hPa.log"  using (lt(\$1)):(\$4-950)   lt 3 lw 2      title  "pressure-950hPa /hPa (probe2)"
 set output
 EOF
 	mv "$plotfile.tmp" "$plotfile"
 	if [ "$linkto" != "" ]; then
 		ln -sf "$plotfile" "$linkto"
 	fi
+}
+
+makeahfile() {
+	# assume degC and %rh files are line synchronized
+	date="$1"
+	while read t1 h1 h2 rest <&3 && read t2 c1 c2 rest <&4; do
+		if [ "$t1" = "#" -o "$t2" = "#" ]; then continue; fi
+		#if [ "$t1" != "$t2" ]; then continue; fi # small discrepancy tolerable (!)
+		if [ "$h1" != "" -a "$c1" != "" ]; then a1=`rhtoah $h1 $c1`; else a1="?"; fi
+		if [ "$h2" != "" -a "$c2" != "" ]; then a2=`rhtoah $h2 $c2`; else a2="?"; fi
+		echo "$t1 $a1 $a2"
+	done 3<${date}-%rh.log 4<${date}-degC.log
 }
 
 dailyprocess() {
@@ -186,9 +226,11 @@ dailyprocess() {
 
 # start of main script
 
-if [ "$1" != "" -a "$2" != "" ]; then
-	# just plot existing named logfile
-	plotfile "$1" "$2"
+if [ "$1" != "" ]; then
+	# just replot existing named logfile for date
+	#plotdate "$1"
+	makeahfile "$1"
+	#plotlongterm
 	exit
 fi
 
@@ -214,22 +256,24 @@ else
 
 	if [ "$OLDLOGFILE" != "" ]; then
 		ln -sf "$OLDLOGFILE" yesterday.log
-		plotfile "$OLDLOGFILE" yesterday.png
+		#plotfile "$OLDLOGFILE" yesterday.png
 		dailyprocess "$OLDLOGFILE"
 		plotlongterm
 	fi
 fi
 
-plotfile "$LOGFILE" today.png lazy
+#plotfile "$LOGFILE" today.png lazy
 
 # new scheme
 
-getsensorlines | ( 
+getsensorlines | addah | ( 
 	read sunit seconds
 	if [ "$sunit" != "seconds:" ]; then exit; fi
 	LOGFILEPRE=`makelogfiledir ${seconds%.*}`
 	if [ "$LOGFILEPRE" = "" ]; then exit; fi
 	declare -A replot
+	declare -a degc
+	declare -a rh
 	while read unitcolon values; do
 		unit="${unitcolon%:}"
 		LOGFILE="${LOGFILEPRE}-$unit.log"
@@ -254,13 +298,7 @@ getsensorlines | (
 	# special case for minmax-ah.log
 	for date in ${!replot[@]}; do
 		# assume degC and %rh files are line synchronized
-		while read t1 h1 h2 rest <&3 && read t2 c1 c2 rest <&4; do
-			if [ "$t1" = "#" -o "$t2" = "#" ]; then continue; fi
-			#if [ "$t1" != "$t2" ]; then continue; fi # small discrepancy tolerable (!)
-			if [ "$h1" != "" -a "$c1" != "" ]; then a1=`rhtoah $h1 $c1`; else a1="?"; fi
-			if [ "$h2" != "" -a "$c2" != "" ]; then a2=`rhtoah $h2 $c2`; else a2="?"; fi
-			echo "$t1 $a1 $a2"
-		done 3<${date}-%rh.log 4<${date}-degC.log | minmax -s >>minmax-ah.log
+		makeahfile $date | minmax -s >>minmax-ah.log
 	done
 	
 	# build daily minmax charts
@@ -270,6 +308,8 @@ getsensorlines | (
 
 	# build complete charts for finalized day(s)
 	for date in ${!replot[@]}; do
-		plotdate $date
+		plotdate "$date" yesterday.png
 	done
 )
+
+plotdate "$LOGFILEPRE" today.png degC
