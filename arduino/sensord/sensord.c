@@ -204,7 +204,11 @@ static int decodedata(probeport *p) {
 	double x;
 	
 	//DBG(printf("decodedata:in \"%s\"\n",l);)
-	
+
+	if (l[0]=='\0') {
+		/* blank line */
+		return 0;
+	}
 	if (strncmp("# ",l,2)==0) {
 		/* comment line */
 		return 0;
@@ -236,6 +240,7 @@ static int decodedata(probeport *p) {
 		DBG(printf("decodedata:out %s\n",measurement_string(&p->data.m,1));)
 		return 1;
 	}
+	TRACE(printf("decodedata: bad line \"%s\" %d/%d\n",p->line,p->current,p->max);)
 	return -1; /* malformed line */
 }
 
@@ -257,10 +262,10 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 
 		end=strchr(p->line,'\n');
 		if (!end && p->current+1 >= p->max) {
-			/* implicit '\n' at end of line */
+			/* implicit '\n' at forced end of line */
 			end=&p->line[p->current];
 		}
-		if (!end) {err="incomplete data"; break;}
+		if (!end) break; /* incomplete line */
 
 		*end='\0';
 		switch(decodedata(p)) {
@@ -609,7 +614,7 @@ int main(int argc,char *argv[]) {
 	progname=*argv++; argc--;
 
 	/* debugging */
-	DBG(probename="testdatatty";)
+	//DBG(probename="testdatatty";)
 	DBG(port=PORT+1;)
 	DBG(TRACE(printf("starting server on port %d\n",port);))
 
