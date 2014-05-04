@@ -25,6 +25,7 @@
 
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define lengthof(x) (sizeof(x)/sizeof(*(x)))
+typedef unsigned int bool;
 
 /* HTTP headers */
 #define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8d",LEN)
@@ -94,6 +95,11 @@ struct tempavg_s {
 	measurement avg; /* cache of mean calculation */
 };
 const struct tempavg_s tempavg_zero={NULL,0,MEASUREMENT_ZERO,MEASUREMENT_ZERO};
+
+struct probestate_s {
+	struct tempavg_s *probe;
+	int probes;
+};
 
 typedef struct {
 	/* not a list yet: struct probeport_s *next,*prev; */
@@ -342,19 +348,18 @@ static void combineavg(struct tempavg_s *p,struct tempdata_s *newdata) {
 	measurementop(&p->avg,'/',&p->n);
 }
 
-static struct tempavg_s *processdata(struct tempavg_s *probe,int *probes,struct tempdata_s *d) {
-	if (!d) return probe;
-	if (!probe) *probes=0;
-	if (d->probe >= MAXPROBES) return probe;
-	if (d->probe >= *probes) {
-		probe=realloc(probe,sizeof(*probe)*(d->probe+1));
-		if (!probe) {*probes=0; return NULL;}
-		while(*probes <= d->probe)
-			probe[(*probes)++]=tempavg_zero;
+static void processdata(struct probestate_s *s,struct tempdata_s *d) {
+	if (!s || !d) return;
+	if (d->probe >= MAXPROBES) return;
+	if (!s->probe) s->probes=0;
+	if (d->probe >= s->probes) {
+		s->probe=realloc(s->probe,sizeof(*s->probe)*(d->probe+1));
+		if (!s->probe) {s->probes=0; return;}
+		for(;s->probes <= d->probe;s->probes++)
+			s->probe[s->probes]=tempavg_zero;
 	}
-	combineavg(&probe[d->probe],d);
-	DBG(printf("processdata: %s\n",measurement_string(&probe[d->probe].avg,1));)
-	return probe;
+	combineavg(&s->probe[d->probe],d);
+	DBG(printf("processdata: %s\n",measurement_string(&s->probe[d->probe].avg,1));)
 }
 
 /* -- web server stuff -- */
@@ -363,43 +368,186 @@ struct server_s {
 	struct server_s *next,*prev;
 	int socket;
 	enum {
-		server_reset,
+		server_reseting,
 		server_reading,
 		server_writing,
 		server_writinglast,
 		server_processing,
 		server_closing} state;
 	int count,buflen;
+	int idle;
 	#define URISPEC "%199s" /* stringify sizeof uri */
 	char uri[200];
 	char buf[3800];
 };
 
-static struct server_s *server_new(int socket,struct server_s *sl) {
-	/* create new server on socket, or reset sl */
-	do {
-		if (sl) socket=sl->socket;
-		if (socket==-1) break;
-		if (!sl) {sl=calloc(1,sizeof(*sl)); sl->state=server_reset;}
-		if (!sl) break;
+static void server_delete(struct server_s *sl) {
+	close(sl->socket);
+	free(sl);
+}
 
-		switch(sl->state) {
-		case server_reset:
-		case server_reading:
-		case server_writing:
-		case server_processing:
-			sl->state=server_reading;
+static void server_reset(struct server_s *sl) {
+	switch(sl->state) {
+	case server_reseting:
+	case server_reading:
+	case server_writing:
+	case server_processing:
+		sl->state=server_reading;
+		break;
+	default:
+		sl->state=server_closing;
+		break;
+	}
+	sl->count=0;
+	sl->idle=0;
+	sl->buflen=0;
+	memset(sl->buf,0,sizeof(sl->buf));
+}
+
+static struct server_s *server_new(int socket) {
+	/* create new server on socket */
+	struct server_s *sl;
+	sl=calloc(1,sizeof(*sl));
+	if (!sl) return NULL;
+	sl->state=server_reseting;
+	sl->socket=socket;
+	server_reset(sl);
+	return sl;
+}
+
+static struct server_s *server_process(struct server_s *sl,bool readable,bool writable,struct probestate_s *s) {
+	char *crlf;
+	int tmp;
+	ssize_t r,w,send;
+	
+	switch(sl->state) {
+	case server_reading:
+		if (!readable) {sl->idle+=AVGTIME; break;}
+		r=read(sl->socket,sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen-1);
+		if (r==-1) {sl->state=server_closing; break;}
+		sl->buflen+=r;
+		crlf=strstr(sl->buf,"\r\n\r\n"); /* buf is always terminated */
+		if (sl->buflen>=sizeof(sl->buf)-1 || r==0 || crlf) {
+			/* note: this may fail for multiple-request operations */
+			TRACE(printf("GOT: \"%*s\"\n",sl->buflen,sl->buf);)
+			sl->state=server_processing;
 			break;
-		default:
+		}
+		break;
+	case server_writing:
+	case server_writinglast:
+		if (!writable) {sl->idle+=AVGTIME; break;}
+		send=sl->buflen - sl->count;
+		TRACE(printf("SEND: \"%*s\" (%zd chars)\n",send,sl->buf+sl->count,send);)
+		w=write(sl->socket,sl->buf+sl->count,send);
+		if (w==-1) sl->state=server_closing;
+		else if (w==0) sl->state=server_closing;
+		else if (w==send && sl->state==server_writinglast) sl->state=server_closing;
+		else if (w==send) sl->state=server_reseting;
+		else sl->count+=w;
+		break;
+	case server_processing:
+		#define OUTADD(...) do { \
+			if (sl->buflen < sizeof(sl->buf)) \
+				sl->buflen+=snprintf(sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen,__VA_ARGS__); \
+			} while(0)
+		#define OUT_OK() do { \
+				HEADER_OK_SET_CONTENTLENGTH(sl->buf,sl->buflen-sizeof(header_ok)+1); \
+				sl->state=server_writing; \
+			} while(0)
+		#define OUT_NOK() (sl->state=server_writinglast)
+		#define OUT(...) do { \
+				sl->buflen=0; \
+				OUTADD(__VA_ARGS__); \
+			} while(0)
+		sl->idle=0;
+		/* buf must start with requst-line */
+		if (sl->buflen<4 || sscanf(sl->buf,"GET " URISPEC,sl->uri)!=1) {
+			TRACE(printf("FAIL: \"%s\"\n",sl->buf);)
 			sl->state=server_closing;
 			break;
 		}
-		sl->socket=socket;
-		sl->count=0;
-		sl->buflen=0;
-		memset(sl->buf,0,sizeof(sl->buf));
-	} while(0);
-	return sl;
+		TRACE(printf("PROCESSING: %s\n",sl->uri);)
+		if (strcmp(sl->uri,"/")==0) {
+			OUT("%s# temperature server\r\n# probeline probe degC %%rh state\r\n",header_ok);
+			OUT_OK();
+			break;
+		}
+		if (strcmp(sl->uri,"/probes")==0) {
+			int i;
+			OUT("%s",header_ok);
+			for(i=0;i < s->probes;i++) {
+				OUTADD("%d %s\r\n",i,measurement_string(&s->probe[i].avg,0));
+			}
+			OUT_OK();
+			break;
+		}
+		if (strcmp(sl->uri,"/probeline")==0) {
+			/* legacy */
+			int i;
+			long long int t;
+			struct timeval tv;
+			gettimeofday(&tv,NULL);
+			t=tv.tv_sec;
+			OUT("%s%lld",header_ok,t);
+			for(i=0;i < s->probes;i++)
+				OUTADD(" %s",measurement_tempother(&s->probe[i].avg,0));
+			OUTADD("\r\n");
+			OUT_OK();
+			break;
+		}
+		if (strcmp(sl->uri,"/measurementlines")==0) {
+			int i;
+			double t;
+			struct timeval tv;
+
+			gettimeofday(&tv,NULL);
+			t=tv.tv_sec;
+			t+=tv.tv_usec * 1e-6;
+			OUT("%sseconds: %.1f",header_ok,t);
+
+			#define ULINE(UN,CONV) \
+				OUTADD("\n%s:",UN); \
+				for(i=0;i < s->probes;i++) \
+					OUTADD(" %s",CONV(&s->probe[i].avg,0));
+			ULINE("degC",temp_string);
+			ULINE("%rh",rh_string);
+			ULINE("hPa",pressure_string);
+			ULINE("state",state_string);
+			OUTADD("\n");
+			OUT_OK();
+			break;
+		}
+		if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
+			if (tmp<0 || tmp >= s->probes) {
+				OUT("%s",header_bad);
+				OUT_NOK();
+			}
+			else {
+				struct tempdata_s *d;
+				OUT("%s",header_ok);
+				d=dll_head(s->probe[tmp].list);
+				OUTADD("%s\r\n",measurement_string(&d->m,0));
+				OUT_OK();
+			}
+			break;
+		}
+		/* otherwise... */
+		OUT("%s",header_notfound);
+		OUT_NOK();
+		break;
+	case server_reseting:
+		TRACE(printf("RESET\n");)
+		server_reset(sl);
+		break;
+	case server_closing:
+		/* will eventually get all of them */
+		TRACE(printf("CLOSING\n");)
+		sl->idle=300;
+		break;
+	}
+	if (sl->idle >= 300) return sl;
+	return NULL;
 }
 
 /* -- do stuff -- */
@@ -407,12 +555,11 @@ static struct server_s *server_new(int socket,struct server_s *sl) {
 static const char *mainloop(int listenfd,probeport *pp) {
 	fd_set readfds,writefds;
 	int maxfd;
-	struct tempavg_s *probe=NULL;
-	int probes=0;
 	struct timeval timeout;
 	struct server_s *serverlist=NULL,*sl,*closesl=NULL;
 	int tmp;
 	const char *e=NULL;
+	struct probestate_s probestate={NULL,0};
 	
 	if (pp->fd==-1) return "bad data tty";
 	if (listenfd==-1) return "bad listening socket";
@@ -443,163 +590,32 @@ static const char *mainloop(int listenfd,probeport *pp) {
 		if (FD_ISSET(listenfd,&readfds)) {
 			int ss;
 			ss=accept(listenfd,NULL,NULL);
-			sl=server_new(ss,NULL);
+			sl=server_new(ss);
 			if (sl) dll_add(serverlist,sl);
 			continue; /* updated serverlist invalidates select results */
 		}
 		/* process select()'s probelist */
 		if (FD_ISSET(pp->fd,&readfds)) {
-			struct tempavg_s *p=probe;
-			probe=processdata(probe,&probes,readmoredata(pp,&e));
+			processdata(&probestate,readmoredata(pp,&e));
 			if (e) break;
-			if (!probe && p) {e="nomem"; break;}
 		}
 		/* process select()'s serverlist */
 		for_dll(serverlist,sl) {
-			char *crlf;
-			switch(sl->state) {
-			case server_reading:
-				if (FD_ISSET(sl->socket,&readfds)) {
-					ssize_t r;
-					r=read(sl->socket,sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen-1);
-					if (r==-1) {sl->state=server_closing; break;}
-					sl->buflen+=r;
-					crlf=strstr(sl->buf,"\r\n\r\n"); /* buf is always terminated */
-					if (sl->buflen>=sizeof(sl->buf)-1 || r==0 || crlf) {
-						/* note: this may fail for multiple-request operations */
-						TRACE(printf("GOT: %*s\n",sl->buflen,sl->buf);)
-						sl->state=server_processing;
-						break;
-					}
-					break;
-				}
-				break;
-			case server_writing:
-			case server_writinglast:
-				if (FD_ISSET(sl->socket,&writefds)) {
-					ssize_t w,send;
-					send=sl->buflen - sl->count;
-					TRACE(printf("SEND: %*s\n",sl->count,sl->buf);)
-					w=write(sl->socket,sl->buf+sl->count,send);
-					if (w==-1) sl->state=server_closing;
-					else if (w==0) sl->state=server_closing;
-					else if (w==send && sl->state==server_writinglast) sl->state=server_closing;
-					else if (w==send) sl->state=server_reset;
-					else sl->count+=w;
-				}
-				break;
-			case server_processing:
-				#define OUTADD(...) do { \
-					if (sl->buflen < sizeof(sl->buf)) \
-						sl->buflen+=snprintf(sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen,__VA_ARGS__); \
-					} while(0)
-				#define OUT_OK() do { \
-						HEADER_OK_SET_CONTENTLENGTH(sl->buf,sl->buflen-sizeof(header_ok)+1); \
-						sl->state=server_writing; \
-					} while(0)
-				#define OUT_NOK() (sl->state=server_writinglast)
-				#define OUT(...) do { \
-						sl->buflen=0; \
-						OUTADD(__VA_ARGS__); \
-					} while(0)
-
-				/* buf must start with requst-line */
-				if (sl->buflen<4 || sscanf(sl->buf,"GET " URISPEC,sl->uri)!=1) {
-					TRACE(printf("FAIL: %s\n",sl->buf);)
-					sl->state=server_closing;
-					break;
-				}
-				TRACE(printf("SENDING: %s\n",sl->uri);)
-				if (strcmp(sl->uri,"/")==0) {
-					OUT("%s# temperature server\r\n# probeline probe degC %%rh state\r\n",header_ok);
-					OUT_OK();
-					break;
-				}
-				if (strcmp(sl->uri,"/probes")==0) {
-					int i;
-					OUT("%s",header_ok);
-					for(i=0;i<probes;i++) {
-						OUTADD("%d %s\r\n",i,measurement_string(&probe[i].avg,0));
-					}
-					OUT_OK();
-					break;
-				}
-				if (strcmp(sl->uri,"/probeline")==0) {
-					/* legacy */
-					int i;
-					long long int t;
-					struct timeval tv;
-					gettimeofday(&tv,NULL);
-					t=tv.tv_sec;
-					OUT("%s%lld",header_ok,t);
-					for(i=0;i<probes;i++)
-						OUTADD(" %s",measurement_tempother(&probe[i].avg,0));
-					OUTADD("\r\n");
-					OUT_OK();
-					break;
-				}
-				if (strcmp(sl->uri,"/measurementlines")==0) {
-					int i;
-					double t;
-					struct timeval tv;
-					
-					gettimeofday(&tv,NULL);
-					t=tv.tv_sec;
-					t+=tv.tv_usec * 1e-6;
-					OUT("%sseconds: %.1f",header_ok,t);
-					
-					#define ULINE(UN,CONV) \
-						OUTADD("\n%s:",UN); \
-						for(i=0;i<probes;i++) \
-							OUTADD(" %s",CONV(&probe[i].avg,0));
-					ULINE("degC",temp_string);
-					ULINE("%rh",rh_string);
-					ULINE("hPa",pressure_string);
-					ULINE("state",state_string);
-					OUTADD("\n");
-					OUT_OK();
-					break;
-				}
-				if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
-					if (tmp<0 || tmp>=probes) {
-						OUT("%s",header_bad);
-						OUT_NOK();
-					}
-					else {
-						struct tempdata_s *d;
-						OUT("%s",header_ok);
-						d=dll_head(probe[tmp].list);
-						OUTADD("%s\r\n",measurement_string(&d->m,0));
-						OUT_OK();
-					}
-					break;
-				}
-				/* otherwise... */
-				OUT("%s",header_notfound);
-				OUT_NOK();
-				break;
-			case server_reset:
-				sl=server_new(-1,sl);
-				break;
-			case server_closing:
-				/* will eventually get all of them */
-				TRACE(printf("CLOSING\n");)
-				closesl=sl;
-				break;
-			}
+			bool readable=FD_ISSET(sl->socket,&readfds);
+			bool writable=FD_ISSET(sl->socket,&writefds);
+			closesl=server_process(sl,readable,writable,&probestate);
 		}
 		if (closesl) {
-			close(closesl->socket);
 			dll_remove(serverlist,closesl);
-			free(closesl);
+			server_delete(closesl);
 			closesl=NULL;
 		}
 	}
 	while(!dll_empty(serverlist))
 		dll_remove(serverlist,dll_head(serverlist));
-	for(tmp=0;tmp<probes;tmp++)
-		combineavg(&probe[tmp],NULL);
-	free(probe);
+	for(;probestate.probes>=1;probestate.probes--)
+		combineavg(&probestate.probe[probestate.probes-1],NULL);
+	free(probestate.probe);
 	return e;
 }
 
@@ -614,7 +630,7 @@ int main(int argc,char *argv[]) {
 	progname=*argv++; argc--;
 
 	/* debugging */
-	//DBG(probename="testdatatty";)
+	DBG(probename="testdatatty";)
 	DBG(port=PORT+1;)
 	DBG(TRACE(printf("starting server on port %d\n",port);))
 

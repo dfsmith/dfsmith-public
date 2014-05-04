@@ -3,12 +3,6 @@
 cd "/home/dfsmith/public_html/sensors"
 export PATH="$PATH:/home/dfsmith/bin"
 
-gettempline() {
-	# returns sensor data in the form
-	# time temp1 rh1 temp2 rh2...
-	curl -s http://localhost:8888/probeline
-}
-
 getsensorlines() {
 	# returns sensor data in the form
 	# seconds: time
@@ -88,6 +82,7 @@ set format x "%F"
 set timefmt "%Y-%m-%d"
 set xrange ["2014-01-01":*]
 set timefmt "%s"
+set grid x
 set grid y
 set xtics rotate by -30
 ctof(t)=32+1.8*t
@@ -133,10 +128,14 @@ plotdate() {
 	lazyfile="${date}-$3.log"
 	plotfile="${date}.png"
 
+	if [ ! -f "${date}-degC.log" ]; then
+		return
+	fi
+
 	if [ -f "$lazyfile" -a -f "$plotfile" ]; then
 		lazyage=`stat -c %Z "${lazyfile}"`
 		plotage=`stat -c %Z "${plotfile}"`
-		if [ $(( $lazyage - $plotage )) -lt 120 ]; then
+		if [ $(( $lazyage - $plotage )) -lt 300 ]; then
 			# less than 5 minutes old: skip plotting
 			return
 		fi
@@ -205,67 +204,22 @@ makeahfile() {
 	done 3<${date}-%rh.log 4<${date}-degC.log
 }
 
-dailyprocess() {
-	declare -a ah
-	logfile="$1"
-	ah=( `cut -d' ' -f2,3 <"$logfile" | rhtoah -r | minmax` )
-	an1="${ah[1]}"
-	ax1="${ah[3]}"
-	ah=( `cut -d' ' -f4,5 <"$logfile" | rhtoah -r | minmax` )
-	an2="${ah[1]}"
-	ax2="${ah[3]}"
-	minmax <"$logfile" | {
-		read min tmn tn1 hn1 tn2 hn2 tn3 pn3 restn
-		read max tmx tx1 hx1 tx2 hx2 tx3 px3 restx
-		echo >>"daily-temp.log"     "$tmn $tmx $tn1 $tx1 $tn2 $tx2"
-		echo >>"daily-rh.log"       "$tmn $tmx $hn1 $hx1 $hn2 $hx2"
-		echo >>"daily-ah.log"       "$tmn $tmx $an1 $ax1 $an2 $ax2"
-		echo >>"daily-pressure.log" "$tmn $tmx $pn3 $px3"
-	}
-}
-
 # start of main script
 
+# replot charts?
 if [ "$1" != "" ]; then
-	# just replot existing named logfile for date
-	#plotdate "$1"
-	makeahfile "$1"
-	#plotlongterm
+	case "$1" in
+	longterm)
+		plotlongterm
+		;;
+	*)
+		plotdate "$1"
+		;;
+	esac
 	exit
 fi
 
-# old scheme
-
-TEMPLINE=`gettempline`
-set -- $TEMPLINE
-LOGFILEPRE=`makelogfiledir $1`
-if [ "$LOGFILEPRE" = "" ]; then exit; fi
-LOGFILE="${LOGFILEPRE}-tth.log"
-
-if [ -f "$LOGFILE" ]; then
-	# file exists: append and plot
-	echo >>"$LOGFILE" "$TEMPLINE"
-else
-	# start new file and rotate old files
-	echo >>"$LOGFILE" "# tm_sec temp0 rh0 temp1 rh1..."
-	echo >>"$LOGFILE" "# $DATE"
-	echo >>"$LOGFILE" "$TEMPLINE"
-
-	OLDLOGFILE=`readlink today.log`
-	ln -sf "$LOGFILE" today.log
-
-	if [ "$OLDLOGFILE" != "" ]; then
-		ln -sf "$OLDLOGFILE" yesterday.log
-		#plotfile "$OLDLOGFILE" yesterday.png
-		dailyprocess "$OLDLOGFILE"
-		plotlongterm
-	fi
-fi
-
-#plotfile "$LOGFILE" today.png lazy
-
-# new scheme
-
+# cron script: get new sensor data
 getsensorlines | addah | ( 
 	read sunit seconds
 	if [ "$sunit" != "seconds:" ]; then exit; fi
@@ -295,21 +249,16 @@ getsensorlines | addah | (
 		echo >>"$LOGFILE" "$seconds $values"
 	done
 
-	# special case for minmax-ah.log
-	for date in ${!replot[@]}; do
-		# assume degC and %rh files are line synchronized
-		makeahfile $date | minmax -s >>minmax-ah.log
-	done
-	
-	# build daily minmax charts
-	if [ "$replot" != "" ]; then
-		plotlongterm
-	fi
-
 	# build complete charts for finalized day(s)
 	for date in ${!replot[@]}; do
 		plotdate "$date" yesterday.png
 	done
-)
 
-plotdate "$LOGFILEPRE" today.png degC
+	# keep current charts up to the minute
+	plotdate "$LOGFILEPRE" today.png degC
+
+	# build daily minmax charts
+	if [ ${#replot[@]} -gt 0 ]; then
+		plotlongterm
+	fi
+)
