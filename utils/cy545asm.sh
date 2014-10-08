@@ -12,6 +12,40 @@ assembleycode() {
 	# Note: does not check for label page boundaries.
 	eval $*
 	origin=100
+
+	# Glow-in-the-dark ghost controller code.
+	# Motor enable output on B0.
+	# Home input on B1.
+	# Light relay on B2.
+	# Trigger input on B3.
+	# When home sensor, move ghost slowly to recharge light.
+	# At start, move ghost out, then back to find home.
+	# When triggered:
+	#	motor on
+	#	light on
+	#	move ghost out slowly
+	#	light off
+	#	fly ghost across quickly
+	#	dance ghost
+	#	fly ghost back quickly
+	#	light on
+	#	move ghost in slowly
+	#	light off
+	#	motor off
+	cr="#"
+	waittrigger="W 3"
+	lighton="B 2"
+	lightoff="/B 2"
+	motoron="/B 0"
+	motoroff="B 0"
+	slow="R 50"
+	fast="R 200"
+	goout="-${cr}G"
+	goin="+${cr}G"
+	emerge="$lighton${cr}N 200$cr$slow$cr$goout$cr$lightoff"
+	retreat="$lighton${cr}N 200$cr$slow$cr$goin$cr$lightoff"
+	across="N 5000$cr$fast$cr$goout"
+	back="N 5000$cr$fast$cr$goin"
 	cat <<EOF
 # CY545 assembler from here
 	echo start
@@ -19,92 +53,95 @@ assembleycode() {
 	E
 # start of code
 .origin $origin
+	echo ghost awakens
 	D 100
-	echo begin
-	D 100
-	echo again
-	D 100
-	T 11H,$label_low
-	T 01H,$label_high
-	echo neither
+	
+	# find home
+.mainloop
+	R 10
+	N 5
+.dehoming
+	$goout
+	T 11H,$label_homing
+	L 10,$label_dehoming
+	echo dehoming failed
 	0
-.low
+.homing
+	$goin
 	D 100
-	echo low
+	T 01H,$label_homed
+	L 10,$label_homing
+	echo homing failed
 	0
-.high
-	D 100
-	echo high
-	0
+
+.homed
+	$emerge
+	$retreat
+.waitfortrigger
+	echo waiting...
+	$waittrigger
+	echo ghost triggered
+	$motoron
+	$emerge
+	$across
+	$back
+	$retreat
+	$motoroff
+	Y $label_mainloop
 	Q
+	echo end
 	Y $origin
-	? M,40
+	? Y
 EOF
-return
+}
 
+debugout() {
+	if [ "$2" = "#" ]; then
+		echo
+		echo -n "$count: "
+		return
+	fi
+	echo -n "$2"
+}
 
-W 11H
-.go
-"go
-"
-/B 0
-R 100
-N 200
-+
-G
-R 200
-N 2000
-+
-G
-D 1000
--
-G
-R 100
-N 200
--
-G
-"stop
-"
-B 0
-Y 100
-0
-Q
-"end
-"
-Y 100
-? Y
-EOF
+devout() {
+	dev="$1"
+	byte="$2"
+	if [ "$2" = "#" ]; then
+		byte="$'\r'"
+		delay="sleep 0.1"
+	else
+		delay="sleep 0.01"
+	fi
+	echo -en >>$dev "$byte"
+	$delay
 }
 
 send() {
 	# send code to device or console
 	if [ "$1" = "" ]; then
-		sep=$'\n'
-		dev="/dev/tty"
-		chardelay=""
-		linedelay=""
+		dev="none"
+		output=debugout
 	else
-		sep=$'\r'
 		dev="$1"
-		chardelay="sleep 0.01"
-		linedelay="sleep 0.1"
+		output=devout
+		# Set serial auto-baud.
+		$output $dev "#"
+		$output $dev "#"
+		$output $dev "#"
 	fi
-	
+
+	count=$offset
 	while IFS= read -n1 char; do
-		if [ "$char" = "#" ]; then
-			char="$sep"
-			delay="$linedelay"
-		else
-			delay="$chardelay"
-		fi
-		echo -en >>$dev "$char"
-		$delay
+		count=$(( $count + 1 ))
+		$output $dev "$char"
 	done
 }
 
 parse() {
 	# decode macros/labels
 	cmd="$1"
+	if [ "$cmd" = "" ]; then return; fi
 	shift
 	case $cmd in
 	echo)
@@ -112,6 +149,7 @@ parse() {
 		;;
 	.origin)
 		offset=$(( $1 - ${#code} ))
+		labels+="offset=$offset "
 		;;
 	.*)
 		if [ "$1" != "" ]; then
@@ -162,4 +200,5 @@ while true; do
 	oldlabels="$labels"
 done
 
-echo -e "###$code" | send $device
+eval $labels
+echo -e "$code" | send $device
