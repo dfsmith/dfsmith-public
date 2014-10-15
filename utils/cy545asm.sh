@@ -2,7 +2,7 @@
 # CY545 stepper motor controller multi-pass assembler utility
 # Daniel F. Smith, 2014
 
-assembleycode() {
+assemblycode() {
 	# Output CY545 assembley code to get assembled.
 	# Parameters: list of labels to evaluate.
 	# Use lower case for macros (see parse()).
@@ -10,8 +10,9 @@ assembleycode() {
 	# Set labels with .mylabel, etc.
 	# Use label with $label_mylabel, etc.
 	# Note: does not check for label page boundaries.
+	# Note: cannot assemble more than 255 bytes in single E block.
 	eval $*
-	origin=100
+	start=3
 
 	# Glow-in-the-dark ghost controller code.
 	# Motor enable output on B0.
@@ -32,98 +33,156 @@ assembleycode() {
 	#	move ghost in slowly
 	#	light off
 	#	motor off
-	cr="#"
-	waittrigger="W 3"
-	lighton="B 2"
-	lightoff="/B 2"
+	check="Q;? Y;E"
+	#waittrigger="W 2"
+	waittrigger=""
+	lighton="B 1"
+	lightoff="/B 1"
 	motoron="/B 0"
 	motoroff="B 0"
 	slow="R 50"
 	fast="R 200"
-	goout="-${cr}G"
-	goin="+${cr}G"
-	emerge="$lighton${cr}N 200$cr$slow$cr$goout$cr$lightoff"
-	retreat="$lighton${cr}N 200$cr$slow$cr$goin$cr$lightoff"
-	across="N 5000$cr$fast$cr$goout"
-	back="N 5000$cr$fast$cr$goin"
-	cat <<EOF
+	goout="-;G"
+	goin="+;G"
+	setemerge="N 200;$slow"
+	setmid="N 5000;$fast"
+	
+	tr ';' '\n' <<EOF
 # CY545 assembler from here
+	0
 	echo start
-	Y $origin
+	Y $start
 	E
 # start of code
-.origin $origin
-	echo ghost awakens
+.origin $start
+	echo awaken
 	D 100
 	
 	# find home
 .mainloop
 	R 10
 	N 5
+	$motoron
+	$check
 .dehoming
 	$goout
 	T 11H,$label_homing
-	L 10,$label_dehoming
-	echo dehoming failed
+	L 100,$label_dehoming
+	$motoroff
+	echo Fdeh
 	0
 .homing
 	$goin
 	D 100
 	T 01H,$label_homed
-	L 10,$label_homing
-	echo homing failed
+	L 100,$label_homing
+	$motoroff
+	echo Fh
 	0
+	$check
 
 .homed
-	$emerge
-	$retreat
+	$setemerge
+	$lighton
+	$goout
+	$goin
 .waitfortrigger
-	echo waiting...
-	$waittrigger
-	echo ghost triggered
-	$motoron
-	$emerge
-	$across
-	$back
-	$retreat
+	echo wait
 	$motoroff
+	$waittrigger
+	echo trig
+	$check
+	$motoron
+	$setemerge
+	$lighton
+	$goout
+	$lightoff
+	$setmid
+	$goout
+	$goin
+	$check
+	$setemerge
+	$lighton
+	$goin
+	$lightoff
+	$motoroff
+	$check
 	Y $label_mainloop
+	0
+	0
+	0
+	0
+	0
+	0
 	Q
 	echo end
-	Y $origin
 	? Y
+	Y $start
+	? Y
+	? M,40
 EOF
 }
 
+settty() {
+	stty <$1 9600 icanon icrnl -crtscts
+	echo -en >$1 "\r\r\r"
+	echo -en >$1 "O 0A0H\r"
+	stty <$1 crtscts
+}
+
 debugout() {
-	if [ "$2" = "#" ]; then
+	if [ $# -lt 3 ]; then echo; fi
+	byte="$2"
+	ct="${3:-0}"
+	nct="${4:-0}"
+	case "$byte" in
+	$'\n')
 		echo
-		echo -n "$count: "
+		# print next address
+		if [ $nct -gt 0 ]; then
+			printf "%d:" $(( $addr + $3 ))
+		else
+			printf "%.*s:" ${#addr} "      "
+		fi
 		return
-	fi
-	echo -n "$2"
+		;;
+	*)
+		echo -n "$byte"
+		;;
+	esac
 }
 
 devout() {
+	if [ $# -lt 3 ]; then return; fi
 	dev="$1"
 	byte="$2"
-	if [ "$2" = "#" ]; then
-		byte="$'\r'"
-		delay="sleep 0.1"
-	else
+	debugout "$1" "$2" "$3" "$4"
+	case "$byte" in
+	$'\n')
+		byte=$'\r'
+		delay="sleep 0.2"
+		;;
+	"\"")
+		delay="sleep 0.5"
+		;;
+	*)
 		delay="sleep 0.01"
-	fi
+		;;
+	esac
 	echo -en >>$dev "$byte"
 	$delay
 }
 
 send() {
-	# send code to device or console
-	if [ "$1" = "" ]; then
-		dev="none"
+	# send code to device or console one character at a time
+	dev="$1"
+	shift
+	eval "$*"
+	echo "$code"|hd
+	echo "$count"|hd
+	if [ "$dev" = "none" ]; then
 		output=debugout
 	else
-		dev="$1"
 		output=devout
 		# Set serial auto-baud.
 		$output $dev "#"
@@ -131,74 +190,111 @@ send() {
 		$output $dev "#"
 	fi
 
-	count=$offset
-	while IFS= read -n1 char; do
-		count=$(( $count + 1 ))
-		$output $dev "$char"
+	addr=$origin
+	while [ "$code" != "" ]; do
+		byte="${code::1}"
+		$output $dev "${code::1}" "${count::1}" "${count:1:1}"
+		addr=$(( $addr + ${count::1} ))
+		code="${code:1}"
+		count="${count:1}"
+	done
+	$output
+}
+
+addcode() {
+	add="$1"
+	while [ "$add" != "" ]; do
+		byte="${add::1}"
+		add="${add:1}"
+		code+="$byte"
+		if [ "$byte" = "\\" ]; then continue; fi
+		count+="$counting"
+		addr=$(( $addr + $counting ))
 	done
 }
 
 parse() {
-	# decode macros/labels
+	# decode macros/labels for one line of assembler
 	cmd="$1"
 	if [ "$cmd" = "" ]; then return; fi
 	shift
 	case $cmd in
-	echo)
-		code+="\"$*#\""
+	"echo")
+		addcode "\"$*\n\""
 		;;
-	.origin)
-		offset=$(( $1 - ${#code} ))
-		labels+="offset=$offset "
+	".origin")
+		addr="$1"
+		origin="$addr"
 		;;
 	.*)
 		if [ "$1" != "" ]; then
 			labels+="label_${cmd:1}=\\\"$1\\\" "
 		else
-			labels+="label_${cmd:1}=\\\"$(( ${#code} + $offset ))\\\" "
+			labels+="label_${cmd:1}=\\\"$addr\\\" "
 		fi
 		;;
 	'#')
 		;;
 	'"')
-		code+='"'
+		addcode '"'
+		;;
+	'Y')
+		if [ $counting -eq 0 ]; then
+			addr="$1"
+		fi
+		addcode "$cmd $*\n"
+		;;
+	'E')
+		addcode 'E\n'
+		counting=1
+		;;
+	'Q')
+		counting=0
+		addcode 'Q\n'
 		;;
 	*)
 		if [ "$*" != "" ]; then
-			code+="${cmd} $*#"
+			addcode "${cmd} $*\n"
 		else
-			code+="${cmd}#"
+			addcode "${cmd}\n"
 		fi
 		;;
 	esac
 }
 
 parser() {
-	offset=0
 	labels=""
+	counting=0
+	addr=0
 	code=''
+	count=''
+	origin=0
 	while read line; do
 		parse $line
 	done
-	echo -e "code='$code' labels=\"$labels\""
+	echo -e "code='$code' labels=\"$labels\" origin=$origin count=\"$count\""
 }
 
 # parse command line
-device=""
+device="none"
 if [ "$1" != "" ]; then device="$1"; fi
 if [ "$device" = "0" ]; then device="/dev/ttyUSB0"; fi
+if [ "$device" != "none" ]; then settty "$device"; fi
 set -o noglob
 
 x1=""
 oldlabels=""
 while true; do
-	x2=`assembleycode $oldlabels | parser`
-	eval $x2 # sets $code and $labels
-	# echo -e "$code" | hd
+	x2=`assemblycode $oldlabels | parser`
+	#echo -e "$x2" | hd
+	eval $x2 # sets $code, $count and $labels
 	if [ "$x1" = "$x2" ]; then break; fi
 	x1="$x2"
 	oldlabels="$labels"
 done
 
-eval $labels
-echo -e "$code" | send $device
+#eval $labels
+#echo "$code"|hd
+#echo "$count"|hd
+send "$device" "$x2"
+
