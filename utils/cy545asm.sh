@@ -19,6 +19,8 @@ assemblycode() {
 	# Home input on B1.
 	# Light relay on B2.
 	# Trigger input on B3.
+	# CTS output on B6.
+	# Must fit in 256 bytes of EEPROM.
 	# When home sensor, move ghost slowly to recharge light.
 	# At start, move ghost out, then back to find home.
 	# When triggered:
@@ -35,17 +37,17 @@ assemblycode() {
 	#	motor off
 	check="Q;? Y;E"
 	#waittrigger="W 2"
-	waittrigger=""
-	lighton="B 1"
-	lightoff="/B 1"
+	waittrigger="D 2000"
+	lighton="B 4"
+	lightoff="/B 4"
 	motoron="/B 0"
 	motoroff="B 0"
-	slow="R 50"
+	slow="R 5"
 	fast="R 200"
 	goout="-;G"
 	goin="+;G"
-	setemerge="N 200;$slow"
-	setmid="N 5000;$fast"
+	setemerge="N 2000;$slow"
+	setmid="N 10000;$fast"
 	
 	tr ';' '\n' <<EOF
 # CY545 assembler from here
@@ -55,41 +57,38 @@ assemblycode() {
 	E
 # start of code
 .origin $start
-	echo awaken
-	D 100
+	echo wake
 	
 	# find home
 .mainloop
 	R 10
 	N 5
 	$motoron
-	$check
+	$lighton
 .dehoming
-	$goout
+	$goin
+	D 100
 	T 11H,$label_homing
 	L 100,$label_dehoming
-	$motoroff
-	echo Fdeh
-	0
+	Y $label_fail
 .homing
-	$goin
+	$goout
 	D 100
 	T 01H,$label_homed
 	L 100,$label_homing
-	$motoroff
-	echo Fh
-	0
-	$check
+	Y $label_fail
 
 .homed
 	$setemerge
-	$lighton
 	$goout
 	$goin
-.waitfortrigger
-	echo wait
+	$lightoff
 	$motoroff
-	$waittrigger
+	# trigger on transition from dark->light
+	echo dk
+	W 02H
+	echo lg
+	W 12H
 	echo trig
 	$check
 	$motoron
@@ -104,22 +103,18 @@ assemblycode() {
 	$setemerge
 	$lighton
 	$goin
-	$lightoff
-	$motoroff
-	$check
 	Y $label_mainloop
-	0
-	0
-	0
-	0
-	0
+.fail
+	$motoroff
+	$lightoff
+	echo Fail
 	0
 	Q
 	echo end
 	? Y
 	Y $start
 	? Y
-	? M,40
+	? M,3
 EOF
 }
 
@@ -160,10 +155,10 @@ devout() {
 	case "$byte" in
 	$'\n')
 		byte=$'\r'
-		delay="sleep 0.2"
+		delay="sleep 0.1"
 		;;
 	"\"")
-		delay="sleep 0.5"
+		delay="sleep 0.2"
 		;;
 	*)
 		delay="sleep 0.01"
@@ -178,8 +173,8 @@ send() {
 	dev="$1"
 	shift
 	eval "$*"
-	echo "$code"|hd
-	echo "$count"|hd
+	#echo "$code"|hd
+	#echo "$count"|hd
 	if [ "$dev" = "none" ]; then
 		output=debugout
 	else
