@@ -76,7 +76,7 @@ static const char *writefile(FILE *ssd,const dfs_file *f) {
 	return err;
 }
 
-static const char *cat(const char *filename) {
+static const char *cat(const char *filename,bool extract) {
 	const char *err=NULL;
 	u8 cat[0x200];
 	FILE *ssd;
@@ -149,7 +149,7 @@ static const char *cat(const char *filename) {
 				f->noread?" noread":"",
 				f->nowrite?" nowrite":"",
 				f->noexec?" noexec":"");
-			err=writefile(ssd,f);
+			if (extract) err=writefile(ssd,f);
 		}
 	} while(0);	
 	fclose(ssd);
@@ -159,10 +159,21 @@ static const char *cat(const char *filename) {
 int main(int argc,char *argv[]) {
 	char *progname;
 	const char *err=NULL;
+	bool extract=0;
 	
 	progname=*(argv++); argc--;
+	if (argc<1) {
+		fprintf(stdout,"Syntax: %s [-x] <imagefile.ssd>...\n",progname);
+		fprintf(stdout,"\tDisplay and optionally extract files\n");
+		fprintf(stdout,"\tfrom an Acorn DFS image files.\n");
+		return 0;
+	}
+	if (strcmp(*argv,"-x")==0) {
+		extract=1;
+		argv++; argc--;
+	}
 	for(;!err && argc>0;argv++,argc--) {
-		err=cat(*argv);
+		err=cat(*argv,extract);
 	}
 	if (err) {
 		fprintf(stderr,"%s: %s\n",progname,err);
