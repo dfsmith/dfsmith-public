@@ -118,7 +118,7 @@ static const char *cat(const char *filename) {
 			f->load|=((loc[0x106]>>2) & 3) << 16;
 			f->exec=loc[0x103]<<8 | loc[0x102]<<0;
 			f->exec|=((loc[0x106]>>6) & 3) << 16;
-			f->length=loc[0x105]<<8 | loc[104]<<0;
+			f->length=loc[0x105]<<8 | loc[0x104]<<0;
 			f->length|=((loc[0x106]>>4) & 3) << 16;
 			f->length|=((loc[0x001]>>7) & 1) << 18;
 			f->start=loc[0x107];
@@ -140,9 +140,10 @@ static const char *cat(const char *filename) {
 		for(i=0;!err && i<31;i++) {
 			dfs_file *f=&d.file[i];
 			if (i>=d.lastfile) continue;
-			printf("%s%.1s.%.7s 0x%.5X 0x%.5X start 0x%.3X%s%s%s%s\n",
+			printf("%s%.1s.%.7s %7u 0x%.5X 0x%.5X start 0x%.3X%s%s%s%s\n",
 				(i>=d.lastfile)?"(empty) ":"",
 				f->directory,f->name,
+				f->length,
 				f->load,f->exec,f->start,
 				f->locked?" L":"",
 				f->noread?" noread":"",
