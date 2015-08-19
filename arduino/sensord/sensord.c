@@ -17,8 +17,8 @@
 #define TRACE(x)
 #define DBG(x)
 
-#define TEMPTTY "/dev/arduinotty"
-//#define TEMPTTY "testdata"
+#define SENSORTTY "/dev/ttyarduino"
+//#define SENSORTTY "testdata"
 #define AVGTIME 60
 #define MAXPROBES 10
 #define PORT 8888
@@ -28,7 +28,7 @@
 typedef unsigned int bool;
 
 /* HTTP headers */
-#define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8d",LEN)
+#define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8zu",LEN)
 const char header_ok[]="HTTP/1.1 200 OK\r\nContent-Length: 00000000\r\n"
                        "Access-Control-Allow-Origin: *\r\n"
                        "Content-Type: text/plain\r\n\r\n";
@@ -624,10 +624,11 @@ int main(int argc,char *argv[]) {
 	SOCKET s=SOCKET_ERROR;
 	const char *progname;
 	probeport *pp=NULL;
-	const char *probename=TEMPTTY;
+	const char *probename=SENSORTTY;
 	int port=PORT;
 
 	progname=*argv++; argc--;
+	if (argc>0) {probename=*argv++; argc--;}
 
 	/* debugging */
 	DBG(probename="testdatatty";)
