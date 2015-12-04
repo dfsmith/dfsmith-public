@@ -226,14 +226,32 @@ static void patterncylon(SOCKET s,uint len) {
 	dst=malloc(3*len); memset(dst,0,3*len);
 
 	gvset(0.2,0.8,0.4,0,0,0,0,0, 1.5,1.8,1.5,0,0,0,0,0);
-	/* gvset(0.9,0.2,0.2,0,0,0,0,0, 1.8,1.8,1.2,0,0,0,0,0); */
+//	gvset(0.9,0.2,0.2,0,0,0,0,0, 1.8,1.8,1.2,0,0,0,0,0);
 
 	for(;;) {
+		float r[2],g[2],b[2];
+		r[0]=gv2(8);  r[1]=gv2(0);
+		g[0]=gv2(9);  g[1]=gv2(1);
+		b[0]=gv2(10); b[1]=gv2(2);
+
+#if 1
+{
+static int count=0;
+const int max=2500;
+const float rad=2*3.1415 / (12*max);
+r[0]=1*(1+sin(count * 1*rad));
+g[0]=1*(1+sin(count * 2*rad));
+b[0]=1*(1+sin(count * 3*rad));
+count++;
+if (count >= max) count=0;
+}
+#endif
+
 		memset(dst,0,3*len);
 		for(i=0;i<len;i++) {
-			dst[3*i+0]=decay(src+0,3,i,len,0.5*gv2(8),0.25*gv2(0));
-			dst[3*i+1]=decay(src+1,3,i,len,0.5*gv2(9),0.25*gv2(1));
-			dst[3*i+2]=decay(src+2,3,i,len,0.5*gv2(10),0.25*gv2(2));
+			dst[3*i+0]=decay(src+0,3,i,len,0.5*r[0],0.25*r[1]);
+			dst[3*i+1]=decay(src+1,3,i,len,0.5*g[0],0.25*g[1]);
+			dst[3*i+2]=decay(src+2,3,i,len,0.5*b[0],0.25*b[1]);
 		}
 		if (sendwait(s,dst,len)<0 && finish==0) finish=400;;
 		tmp=src; src=dst; dst=tmp;

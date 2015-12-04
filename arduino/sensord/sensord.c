@@ -215,7 +215,7 @@ static int decodedata(probeport *p) {
 		/* blank line */
 		return 0;
 	}
-	if (strncmp("# ",l,2)==0) {
+	if (strncmp("#",l,1)==0) {
 		/* comment line */
 		return 0;
 	}
@@ -260,8 +260,8 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 	do {
 		start=&p->line[p->current];
 		len=read(p->fd,start,p->max - p->current-1);
-		//DBG(printf("readmoredata: got %zd bytes\n",len);)
 		if (len==-1) {err="bad read"; break;}
+		TRACE(printf("readmoredata: got %zd bytes on %d: \"%*s\"\n",len,p->fd,(int)len,start);)
 		if (len==0)  {err="no more data"; break;}
 		p->current+=len;
 		p->line[p->current]='\0';
@@ -282,9 +282,11 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 		p->complete=1;
 
 		/* eat off decoded data */
-		len=&p->line[p->current] - (end+1);
-		memmove(p->line,end+1,len);
-		p->current=len;
+		len=&p->line[p->current] - (end);
+		if (len>0) {
+			memmove(p->line,end+1,len-1);
+			p->current=len-1;
+		}
 	} while(0);
 	if (error) *error=err;
 	return r;
@@ -438,7 +440,7 @@ static struct server_s *server_process(struct server_s *sl,bool readable,bool wr
 	case server_writinglast:
 		if (!writable) {sl->idle+=AVGTIME; break;}
 		send=sl->buflen - sl->count;
-		TRACE(printf("SEND: \"%*s\" (%zd chars)\n",send,sl->buf+sl->count,send);)
+		TRACE(printf("SEND: \"%*s\" (%zd chars)\n",(int)send,sl->buf+sl->count,send);)
 		w=write(sl->socket,sl->buf+sl->count,send);
 		if (w==-1) sl->state=server_closing;
 		else if (w==0) sl->state=server_closing;
@@ -584,6 +586,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 			maxfd=MAX(maxfd,sl->socket);
 		}
 		tmp=select(maxfd+1,&readfds,&writefds,NULL,&timeout);
+		TRACE(printf("select returned %d\n",tmp);)
 		if (tmp==-1) {e="select failed"; break;}
 
 		/* process select() results */
@@ -596,6 +599,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 		}
 		/* process select()'s probelist */
 		if (FD_ISSET(pp->fd,&readfds)) {
+			TRACE(printf("select on %d good for reading\n",pp->fd);)
 			processdata(&probestate,readmoredata(pp,&e));
 			if (e) break;
 		}
