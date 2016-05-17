@@ -9,6 +9,7 @@
  */
 
 var casper=require('casper').create();
+casper.options.waitTimeout=20000;
 
 var plu,zip;
 plu=casper.cli.get(0);
@@ -41,12 +42,21 @@ function frys_price() {
 }
 
 function frys_available() {
-	var ss,aa
-	ss=casper.getHTML('div#nbstores td.storeTD');
+	var ss,aa,big;
+
+	big=casper.evaluate(function() {
+		return $('div#nbstores td.storeTD').first().text();
+	});
+	ss=big.replace(/ *\([^)]*\) */g,"").trim();
 	log(ss);
-	aa=casper.getHTML('div#nbstores td.sStatusTD');
+
+	big=casper.evaluate(function() {
+		return $('div#nbstores td.sStatusTD').first().text();
+	});
+	aa=big.trim();
 	log(aa);
-	return ss+":"+aa;
+
+	return ss+": "+aa;
 }
 
 casper.start(frys_link(plu));
@@ -57,11 +67,19 @@ casper.then(function() {
 });
 
 casper.then(function() {
-	if (zip.empty) {return;}
-	this.fill('#changeStore form', {
-		'zcode': zip,
-		'zplu' : plu,
-	},true);
+	if (!zip) {return;}
+	this.fillSelectors('#changeStore form', {
+		'input[id="zcode"]': zip,
+		'input[id="zplu"]' : plu,
+	});
+	this.click('#changeStore form #zbtn');
+});
+
+casper.waitForSelector('div.sub_nbstores');
+
+casper.then(function() {
+	if (!zip) {return;}
+	//log(casper.evaluate(function() {return document.all[0].outerHTML}));
 	store=frys_available();
 });
 
@@ -69,7 +87,7 @@ casper.then(function() {
 	//this.echo(this.getTitle()+" "+price);
 	log(price+title);
 	this.echo(price+"\t"+title);
-	if (!store.empty) {
+	if (store) {
 		this.echo("\t"+store);
 	}
 });
