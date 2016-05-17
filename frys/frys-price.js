@@ -28,16 +28,17 @@ function frys_link(plu) {
 function frys_title() {
 	var tt;
 	tt=casper.getHTML('#ProductName .product_title b');
-	log(tt);
-	if (tt.empty) {
+	log("Title: "+tt);
+	if (!tt) {
 		tt=casper.getHTML('#ProductName .product_title');
+		log("Title (nobold): "+tt);
 	}
 	return tt;
 }
 
 function frys_price() {
 	var pp=casper.getHTML('div#product_price_holder .productPrice label');
-	log(pp);
+	log("Price: "+pp);
 	return pp;
 }
 
@@ -48,13 +49,13 @@ function frys_available() {
 		return $('div#nbstores td.storeTD').first().text();
 	});
 	ss=big.replace(/ *\([^)]*\) */g,"").trim();
-	log(ss);
+	log("Store: "+ss);
 
 	big=casper.evaluate(function() {
 		return $('div#nbstores td.sStatusTD').first().text();
 	});
 	aa=big.trim();
-	log(aa);
+	log("Stock: "+aa);
 
 	return ss+": "+aa;
 }
@@ -66,26 +67,24 @@ casper.then(function() {
 	title=frys_title();	
 });
 
-casper.then(function() {
-	if (!zip) {return;}
-	this.fillSelectors('#changeStore form', {
-		'input[id="zcode"]': zip,
-		'input[id="zplu"]' : plu,
+if (zip) {
+	casper.then(function() {
+		this.fillSelectors('#changeStore form', {
+			'input[id="zcode"]': zip,
+			'input[id="zplu"]' : plu,
+		});
+		this.click('#changeStore form #zbtn');
 	});
-	this.click('#changeStore form #zbtn');
-});
 
-casper.waitForSelector('div.sub_nbstores');
+	casper.waitForSelector('div.sub_nbstores');
 
-casper.then(function() {
-	if (!zip) {return;}
-	//log(casper.evaluate(function() {return document.all[0].outerHTML}));
-	store=frys_available();
-});
+	casper.then(function() {
+		//log(casper.evaluate(function() {return document.all[0].outerHTML}));
+		store=frys_available();
+	});
+}
 
 casper.then(function() {
-	//this.echo(this.getTitle()+" "+price);
-	log(price+title);
 	this.echo(price+"\t"+title);
 	if (store) {
 		this.echo("\t"+store);
