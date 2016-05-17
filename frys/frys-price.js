@@ -8,7 +8,13 @@
  * or ./node_modules/casperjs/bin/casperjs --verbose --log-level=debug frys-price.js 7550776
  */
 
-var casper=require('casper').create({willNavigate: false});
+var casper=require('casper').create();
+
+var plu,zip;
+plu=casper.cli.get(0);
+zip=casper.cli.get(1);
+
+var price,title,store;
 
 function log(msg) {
 	casper.log(msg,'debug');
@@ -34,14 +40,38 @@ function frys_price() {
 	return pp;
 }
 
-casper.start(frys_link(casper.cli.get(0)));
+function frys_available() {
+	var ss,aa
+	ss=casper.getHTML('div#nbstores td.storeTD');
+	log(ss);
+	aa=casper.getHTML('div#nbstores td.sStatusTD');
+	log(aa);
+	return ss+":"+aa;
+}
+
+casper.start(frys_link(plu));
 
 casper.then(function() {
-	var price,title;
 	price=frys_price();
-	title=frys_title();
+	title=frys_title();	
+});
+
+casper.then(function() {
+	if (zip.empty) {return;}
+	this.fill('#changeStore form', {
+		'zcode': zip,
+		'zplu' : plu,
+	},true);
+	store=frys_available();
+});
+
+casper.then(function() {
 	//this.echo(this.getTitle()+" "+price);
+	log(price+title);
 	this.echo(price+"\t"+title);
+	if (!store.empty) {
+		this.echo("\t"+store);
+	}
 });
 
 casper.run();
