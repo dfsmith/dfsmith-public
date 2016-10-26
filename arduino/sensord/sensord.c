@@ -261,7 +261,8 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 		start=&p->line[p->current];
 		len=read(p->fd,start,p->max - p->current-1);
 		if (len==-1) {err="bad read"; break;}
-		TRACE(printf("readmoredata: got %zd bytes on %d: \"%*s\"\n",len,p->fd,(int)len,start);)
+		TRACE(printf("readmoredata: got %zd of %zd bytes on %d: \"%*s\"\n",
+			len,p->max-p->current-1,p->fd,(int)len,start);)
 		if (len==0)  {err="no more data"; break;}
 		p->current+=len;
 		p->line[p->current]='\0';
@@ -271,6 +272,7 @@ static struct tempdata_s *readmoredata(probeport *p,const char **error) {
 			/* implicit '\n' at forced end of line */
 			end=&p->line[p->current];
 		}
+		TRACE(printf("line: \"%*s\"\n",(int)p->current,p->line);)
 		if (!end) break; /* incomplete line */
 
 		*end='\0';
