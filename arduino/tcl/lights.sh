@@ -1,7 +1,7 @@
 #!/bin/bash
 LP=sendTCLudp
 RUNCURRENT=/tmp/lights-state.txt
-TESTDATE=""
+TESTDATE="now"
 
 if [ -f $RUNCURRENT ]; then
 	read <$RUNCURRENT state pid rest
@@ -30,11 +30,11 @@ stoplights() {
 }
 
 setdate() {
-	date "$TESTDATE" +"month=%-m dom=%-d hhmm=%H%M"
+	date --date="$TESTDATE" +'month=%-m dom=%-d hhmm=%H%M'
 }
 
 appropriate() {
-	if [ "$TESTDATE" != "" ]; then
+	if [ "$TESTDATE" != "now" ]; then
 		echo >&2 "condition on `setdate`"
 	fi
 	eval `setdate`
@@ -70,7 +70,7 @@ case "$1" in
 	;;
 test)
 	shift
-	TESTDATE="--date=$*"
+	TESTDATE="$*"
 	echo "lights `appropriate`"
 	;;
 appropriate)
