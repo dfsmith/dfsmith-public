@@ -43,9 +43,10 @@ class Pumpkin:
                                                 scale, angle)
                         return True
                 if (event.state & gtk.gdk.BUTTON3_MASK):
-                        (x, y, scale, angle) = pk.get_simple_transform()
-                        pk.set_simple_transform(x, y, fabs(event.x_root - x)/100, angle)
-                        (x, y, scale, angle) = pk.get_simple_transform()
+                        a,b,c,d,x,y = pk.get_transform()
+                        a = fabs(event.x_root - x)/100
+                        d = fabs(event.y_root - y)/100
+                        pk.set_transform(cairo.Matrix(a,b,c,d,x,y))
                         return True
                 return False
 
@@ -162,9 +163,6 @@ def pumpframe():
 	gc.Rect(parent=r, x=0, y=0, width=1600, height=1200, stroke_color=None, fill_color="black")
 	
 	r.add_child(Pumpkin(300,300,200).root)
-#	r.add_child(Pumpkin(500,400,200).root)
-#	r.add_child(Pumpkin(400,700,200).root)
-#	r.add_child(Pumpkin(400,100,50).root)
 
 	f.add(canvas)
 	f.set_data("pumpkin_canvas", r)
