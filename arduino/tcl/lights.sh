@@ -1,7 +1,9 @@
 #!/bin/bash
+
 LP=sendTCLudp
 RUNCURRENT=/tmp/lights-state.txt
 TESTDATE="now"
+declare -g state pid
 
 if [ -f $RUNCURRENT ]; then
 	read <$RUNCURRENT state pid rest
@@ -10,23 +12,46 @@ else
 	pid=""
 fi
 
-lights() {
-	newstate="$*"
-	if [ "$state" = "$newstate" ]; then return; fi
-	
-	numstate=$newstate
-	if [ "$numstate" = "off" ]; then numstate=7; fi
+stoplights() {
+	declare -g state pid
+
+	if [ "$state" = "off" ]; then return; fi
+	if [ "$pid" != "" ]; then
+		kill $pid
+		return $?
+	else
+		killall $LP >/dev/null 2>&1
+		return $?
+	fi
+}
+
+startlights() {
+	numstate=$(( 0+$1 ))
+	newstate=$2
 	/home/dfsmith/github/arduino/tcl/$LP xmas $numstate >/dev/null &
 	echo >$RUNCURRENT "$newstate $!"
 }
 
-stoplights() {
-	if [ "$state" = "off" ]; then return; fi
-	if [ "$pid" != "" ]; then
-		kill $pid
-	else
-		killall $LP >/dev/null 2>&1
+lights() {
+	declare -g state
+	
+	newstate="$*"
+	if [ "$state" = "$newstate" ]; then
+		if [ "$newstate" = "off" ]; then
+			# ensure lights off
+			startlights 7 off
+		fi
+		return
 	fi
+	
+	# change of state: stop the old process
+	stoplights
+
+	numstate=$newstate
+	if [ "$numstate" = "off" ]; then
+		numstate=7
+	fi
+	startlights $numstate $newstate
 }
 
 setdate() {
@@ -63,7 +88,6 @@ appropriate() {
 
 #######################
 
-stoplights
 case "$1" in
 "")
 	echo "$state"

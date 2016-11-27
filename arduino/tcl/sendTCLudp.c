@@ -125,6 +125,8 @@ static float prorate(float f) {
 }
 
 static uint translate(int full) {
+	/* translate limit is determined by the mathematics */
+	#define TRANSLIMIT 40
 	static uint *table=NULL;
 	if (!table) {
 		uint x=0,i,stepping=0;
@@ -168,7 +170,7 @@ static int mergesendwait(SOCKET s,const pixelfloat *p,pixelfloat *backing,uint l
 			if (i>0)     backing[i-1].chan[j] += bleed*b;
 			if (i<len-1) backing[i+1].chan[j] += bleed*b;
 			
-			buf[3*i+j]=translate(39.0*backing[i].chan[j]);
+			buf[3*i+j]=translate(TRANSLIMIT*backing[i].chan[j]);
 		}
 	}
 	return sendwait(s,buf,len);
@@ -178,7 +180,7 @@ static void patternsinus(SOCKET s,uint len) {
 	double r,g,b;
 	u8 *buffer;
 	uint i;
-	#define N(x) translate(39*sqrt((x+1.0)*0.5))
+	#define N(x) translate(TRANSLIMIT*sqrt((x+1.0)*0.5))
 	
 	buffer=malloc(3*len);
 
@@ -332,9 +334,9 @@ static void patternwave(SOCKET s,uint len) {
 		blue=wave(blue,0.2,len,&march);
 	
 		/* transfer to buffer and send */
-		red[-1].y=(gv2(0)-1.0)*40;
-		green[-1].y=(gv2(1)-1.0)*40;
-		blue[-1].y=(gv2(2)-1.0)*40;
+		red[-1].y=(gv2(0)-1.0)*TRANSLIMIT;
+		green[-1].y=(gv2(1)-1.0)*TRANSLIMIT;
+		blue[-1].y=(gv2(2)-1.0)*TRANSLIMIT;
 		for(i=0;i<len;i++) {
 			uint c;
 			packet[3*i+0]=translate(red[i].y);
@@ -464,6 +466,16 @@ static void patternsparticles(SOCKET s,uint len) {
 	free(backing);
 }
 
+static void patternblack(SOCKET s,uint len) {
+	u8 *packet;
+	uint i;
+	packet=malloc(3*len);
+	if (!packet) return;
+	for(i=0;i<3*len;i++) packet[i]=translate(0);
+	(void)sendwait(s,packet,len);
+	free(packet);
+}
+
 static void patterntest1(SOCKET s,uint len) {
 	u8 *packet;
 	uint i,col;
@@ -471,8 +483,8 @@ static void patterntest1(SOCKET s,uint len) {
 	if (!packet) return;
 	for(col=0;col<4;col++) {
 		for(i=0;i<3*len;i++) {
-			packet[i]=(i<123 && i%3==col)?translate(i/3):0;
-			if (i%3==col) printf("%u %u\n",i,packet[i]);
+			packet[i]=(i%3==col)?translate((i/3) % (TRANSLIMIT+1)):0;
+			//if (i%3==col) printf("%u %u\n",i,packet[i]);
 		}
 		if (sendwait(s,packet,len)<0) break;
 		usleep(1000000);
@@ -636,6 +648,12 @@ static void patternfft(SOCKET s,uint len) {
 	free(buf);
 }
 
+static int parsemode(const char *mode) {
+	if (strcmp(mode,"off")==0) return 14;
+	if (strcmp(mode,"test")==0) return 7;
+	return atoi(mode);
+}
+
 int main(int argc,char *argv[]) {
 	SOCKET s;
 	int mode=-1;
@@ -647,7 +665,7 @@ int main(int argc,char *argv[]) {
 	
 	progname=*(argv++); argc--;
 	if (argc>0) {host=*(argv++); argc--;}
-	if (argc>0) {mode=atoi(*(argv++)); argc--;}
+	if (argc>0) {mode=parsemode(*(argv++)); argc--;}
 	if (argc>0) {lights=atoi(*(argv++)); argc--;}
 
 	if (!sysstatus) {
@@ -699,6 +717,7 @@ int main(int argc,char *argv[]) {
 		case 8:	patternvu(s,lights); break;
 		case 9:	patternfft(s,lights); break;
 		case 10: patternshoutpong(s,lights); break;
+		case 14: patternblack(s,lights); mode=~0U; break;
 		case 15: mode=~0U; break;
 		default: mode=0; break;
 		}
