@@ -1,4 +1,5 @@
 #!/bin/bash
+# needs pkill/pgrep
 
 LP=sendTCLudp
 RUNCURRENT=/tmp/lights-state.txt
@@ -15,43 +16,33 @@ fi
 stoplights() {
 	declare -g state pid
 
-	if [ "$state" = "off" ]; then return; fi
-	if [ "$pid" != "" ]; then
-		kill $pid
-		return $?
-	else
-		killall $LP >/dev/null 2>&1
-		return $?
+	if [ "$pid" = "" ]; then
+		pkill $LP
+		return
 	fi
+	
+	# don't kill processes that aren't $LP
+	for rp in `pgrep $LP`; do
+		if [ $(( $rp )) = $(( $pid )) ]; then
+			kill $pid
+		fi
+	done
 }
 
 startlights() {
-	numstate=$(( 0+$1 ))
-	newstate=$2
-	/home/dfsmith/github/arduino/tcl/$LP xmas $numstate >/dev/null &
+	newstate=$1
+	/home/dfsmith/github/arduino/tcl/$LP xmas $newstate >/dev/null &
 	echo >$RUNCURRENT "$newstate $!"
 }
 
 lights() {
 	declare -g state
+	newstate="$1"
 	
-	newstate="$*"
-	if [ "$state" = "$newstate" ]; then
-		if [ "$newstate" = "off" ]; then
-			# ensure lights off
-			startlights 7 off
-		fi
-		return
+	if [ "$state" != "$newstate" -o "$newstate" = "off" ]; then
+		stoplights
+		startlights $newstate
 	fi
-	
-	# change of state: stop the old process
-	stoplights
-
-	numstate=$newstate
-	if [ "$numstate" = "off" ]; then
-		numstate=7
-	fi
-	startlights $numstate $newstate
 }
 
 setdate() {
@@ -92,7 +83,7 @@ case "$1" in
 "")
 	echo "$state"
 	;;
-test)
+dummy)
 	shift
 	TESTDATE="$*"
 	echo "lights `appropriate`"
