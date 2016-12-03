@@ -16,6 +16,9 @@
 
 typedef unsigned int uint;
 typedef unsigned char u8;
+typedef u8 bool;
+#define FALSE 0
+#define TRUE (!FALSE)
 
 typedef struct {
 	/* changed externally */
@@ -354,18 +357,15 @@ static void patternwave(SOCKET s,uint len) {
 	free(packet);
 }
 
-static void patternsparkles(SOCKET s,uint len) {
+static void patternsparkles(SOCKET s,uint len,bool halloween) {
 	pixelfloat *backing,*buf;
 	int i,c;
-	#define HALLOWEEN 1
-	#if HALLOWEEN
 	const pixelfloat orange={{1,0.3,0.1}},green={{0,1,0}},purple={{1.0,0,0.8}};
 	const pixelfloat weight[]={
 		orange,orange,orange,orange,orange,orange,orange,
 		green,
 		purple,purple,purple,
 	};
-	#endif
 	
 	backing=calloc(len,sizeof(*backing));
 	if (!backing) return;
@@ -377,16 +377,17 @@ static void patternsparkles(SOCKET s,uint len) {
 	for(;;) {
 		if (rand()%(101-(int)(50*gv2(0)))==0) {
 			i=rand()%len;
-			#if HALLOWEEN
-			c=rand()%lengthof(weight);
-			buf[i]=weight[c];
-			#elif 1
-			/* RGB saturated */
-			c=1+rand()%7;
-			buf[i].r=(c&1)?1:0;
-			buf[i].g=(c&2)?1:0;
-			buf[i].b=(c&4)?1:0;
-			#endif
+			if (halloween) {
+				c=rand()%lengthof(weight);
+				buf[i]=weight[c];
+			}
+			else {
+				/* RGB saturated */
+				c=1+rand()%7;
+				buf[i].r=(c&1)?1:0;
+				buf[i].g=(c&2)?1:0;
+				buf[i].b=(c&4)?1:0;
+			}
 		}
 		else i=-1;
 
@@ -709,9 +710,10 @@ int main(int argc,char *argv[]) {
 		case 0:	patternsinus(s,lights); break;
 		case 1:	patterncylon(s,lights); break;
 		case 2:	patternwave(s,lights); break;
-		case 3:	patternsparkles(s,lights); break;
+		case 3:	patternsparkles(s,lights,TRUE); break;
 		case 4:	patternsparticles(s,lights); break;
 		/* case 5:	patternbees(s,lights); break; */
+		case 6:	patternsparkles(s,lights,FALSE); break;
 		case 7:	patterntest1(s,lights); mode=~0U; break;
 		
 		case 8:	patternvu(s,lights); break;

@@ -59,14 +59,14 @@ appropriate() {
 	case $month in
 	10)	# halloween
 		start=1700; stop=2330
-		pattern=3
+		pattern=3 # Halloween sparkles
 		;;
 	12)	# Christmas
 		start=1600; stop=2330
-		pattern=5
+		pattern=6 # Random color sparkles
 		;;
 	*)	start=0; stop=0
-		pattern=7
+		pattern=off
 		;;
 	esac
 
@@ -82,6 +82,9 @@ appropriate() {
 case "$1" in
 "")
 	echo "$state"
+	;;
+--help | -?)
+	echo "$0 [dummy <date>|appropriate|<mode>]"
 	;;
 dummy)
 	shift
