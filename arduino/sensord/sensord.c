@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <poll.h>
+#include <time.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -34,6 +35,7 @@ const char header_ok[]="HTTP/1.1 200 OK\r\nContent-Length: 00000000\r\n"
                        "Content-Type: text/plain\r\n\r\n";
 const char header_bad[]="HTTP/1.1 400 Bad request\r\n\r\n";
 const char header_notfound[]="HTTP/1.1 404 Not found\r\n\r\n";
+const char header_error[]="HTTP/1.1 500 Internal error\r\n\r\n";
 
 /* -- doubly linked circular lists -- */
 
@@ -474,6 +476,22 @@ static struct server_s *server_process(struct server_s *sl,bool readable,bool wr
 		TRACE(printf("PROCESSING: %s\n",sl->uri);)
 		if (strcmp(sl->uri,"/")==0) {
 			OUT("%s# temperature server\r\n# probeline probe degC %%rh state\r\n",header_ok);
+			OUT_OK();
+			break;
+		}
+		if (strcmp(sl->uri,"/localtime")==0) {
+			struct tm tm;
+			time_t t;
+			time(&t);
+			if (!localtime_r(&t,&tm)) {
+				OUT("%s",header_error);
+				OUT_NOK();
+				break;
+			}
+			tm.tm_year+=1900;
+			OUT("%s%04d-%02d-%02d %02d:%02d:%02d\r\n",header_ok,
+				tm.tm_year,tm.tm_mon,tm.tm_mday,
+				tm.tm_hour,tm.tm_min,tm.tm_sec);
 			OUT_OK();
 			break;
 		}
