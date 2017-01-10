@@ -1,7 +1,10 @@
 #!/bin/bash
+# needs pkill/pgrep
+
 LP=sendTCLudp
 RUNCURRENT=/tmp/lights-state.txt
 TESTDATE="now"
+declare -g state pid
 
 if [ -f $RUNCURRENT ]; then
 	read <$RUNCURRENT state pid rest
@@ -10,22 +13,35 @@ else
 	pid=""
 fi
 
-lights() {
-	newstate="$*"
-	if [ "$state" = "$newstate" ]; then return; fi
+stoplights() {
+	declare -g state pid
+
+	if [ "$pid" = "" ]; then
+		pkill $LP
+		return
+	fi
 	
-	numstate=$newstate
-	if [ "$numstate" = "off" ]; then numstate=7; fi
-	/home/dfsmith/github/arduino/tcl/$LP xmas $numstate >/dev/null &
+	# don't kill processes that aren't $LP
+	for rp in `pgrep $LP`; do
+		if [ $(( $rp )) = $(( $pid )) ]; then
+			kill $pid
+		fi
+	done
+}
+
+startlights() {
+	newstate=$1
+	/home/dfsmith/github/arduino/tcl/$LP xmas $newstate >/dev/null &
 	echo >$RUNCURRENT "$newstate $!"
 }
 
-stoplights() {
-	if [ "$state" = "off" ]; then return; fi
-	if [ "$pid" != "" ]; then
-		kill $pid
-	else
-		killall $LP >/dev/null 2>&1
+lights() {
+	declare -g state
+	newstate="$1"
+	
+	if [ "$state" != "$newstate" -o "$newstate" = "off" ]; then
+		stoplights
+		startlights $newstate
 	fi
 }
 
@@ -43,14 +59,14 @@ appropriate() {
 	case $month in
 	10)	# halloween
 		start=1700; stop=2330
-		pattern=3
+		pattern=3 # Halloween sparkles
 		;;
 	12)	# Christmas
 		start=1600; stop=2330
-		pattern=5
+		pattern=6 # Random color sparkles
 		;;
 	*)	start=0; stop=0
-		pattern=7
+		pattern=off
 		;;
 	esac
 
@@ -63,12 +79,14 @@ appropriate() {
 
 #######################
 
-stoplights
 case "$1" in
 "")
 	echo "$state"
 	;;
-test)
+--help | -?)
+	echo "$0 [dummy <date>|appropriate|<mode>]"
+	;;
+dummy)
 	shift
 	TESTDATE="$*"
 	echo "lights `appropriate`"
