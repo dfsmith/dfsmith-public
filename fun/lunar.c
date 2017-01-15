@@ -1,8 +1,13 @@
+/* > lunar.c */
+/* Daniel F. Smith, 2017 */
+/* Compile with
+ * gcc -Wall lunar.c -o lunar -lm && ./lunar | rsvg-convert -f pdf -o lunar.pdf
+ */
 #include <stdio.h>
 #include <math.h>
 
-#define SPIRAL 0
-#define TWOLAYER 1
+#define SPIRAL 0	/* use a spiral for the date ring */
+#define TWOLAYER 1	/* use a staggered date ring */
 
 const double pi=3.14159265358979323;
 
@@ -66,10 +71,10 @@ static void crosshair(coord o,double r) {
 	endgroup();
 }
 
-static void text(coord o,double theta,double size,const char *label) {
+static void text_cen(coord o,double theta,double size,const char *label) {
 	if (!label[0]) return;
-	printf("<text x=\"%f\" y=\"%f\" rotate=\"%f\" font-size=\"%f\">%s</text>\n",
-		XY(o),-360*theta/(2*pi),size,label);
+	printf("<text text-anchor=\"middle\" x=\"%f\" y=\"%f\" transform=\"rotate(%f,%f,%f)\" font-size=\"%f\">%s</text>\n",
+		XY(o),-360*theta/(2*pi),XY(o),size,label);
 }
 
 static void rtbox(double r,double theta,double wtheta,const char *label) {
@@ -88,13 +93,7 @@ static void rtbox(double r,double theta,double wtheta,const char *label) {
 		XY(v[0]),XY(v[1]),XY(v[2]),XY(v[3]));
 	
 	crosshair(rt(r,theta),5);
-	
-	for(theta-=0.8*htheta;*label;label++,theta+=htheta/2) {
-		char s[2];
-		s[0]=*label;
-		s[1]='\0';
-		text(rt(r+0.8*hr,theta),theta,24,s);
-	}
+	text_cen(rt(r+0.8*hr,theta),theta,24,label);
 	endgroup();
 }
 
@@ -105,7 +104,7 @@ int main(void) {
 	int i;
 
 	start(8.5,11,scale);
-	text(xy(scale*(1-outer),scale*(-1-outer)),0,36,"Lunar Calendar Template");
+	text_cen(xy(0,scale*(-1-outer)),0,36,"Lunar Calendar Template");
 
 	/* boudaries */
 	circle(xy(0,0),scale*3.75);
