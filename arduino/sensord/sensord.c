@@ -490,8 +490,8 @@ static struct server_s *server_process(struct server_s *sl,bool readable,bool wr
 			}
 			tm.tm_year+=1900;
 			OUT("%s%04d-%02d-%02d %02d:%02d:%02d\r\n",header_ok,
-				tm.tm_year,tm.tm_mon,tm.tm_mday,
-				tm.tm_hour,tm.tm_min,tm.tm_sec);
+				tm.tm_year,tm.tm_mon+1,tm.tm_mday,
+				tm.tm_hour,tm.tm_min  ,tm.tm_sec);
 			OUT_OK();
 			break;
 		}
