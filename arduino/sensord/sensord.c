@@ -522,11 +522,13 @@ static struct server_s *server_process(struct server_s *sl,bool readable,bool wr
 			int i;
 			double t;
 			struct timeval tv;
+			struct tm tm;
 
 			gettimeofday(&tv,NULL);
 			t=tv.tv_sec;
 			t+=tv.tv_usec * 1e-6;
-			OUT("%sseconds: %.1f",header_ok,t);
+			localtime_r(&tv.tv_sec,&tm);
+			OUT("%sseconds: %.1f %ld",header_ok,t,tm.tm_gmtoff);
 
 			#define ULINE(UN,CONV) \
 				OUTADD("\n%s:",UN); \
