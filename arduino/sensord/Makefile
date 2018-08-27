@@ -1,5 +1,5 @@
 LIBDIR=$(HOME)/c/lib
-CFLAGS=-Wall -I$(LIBDIR)
+CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR)
 
 sensord: sensord.o $(LIBDIR)/socklib.o
 

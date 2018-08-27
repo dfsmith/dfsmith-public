@@ -9,9 +9,28 @@
 ESP8266WiFiMulti WIFIMULTIOBJECT;
 
 /* NodeMCU v3 12E pins */
+/* Mapping of Dx label -> GPIOx (btu/d=boot option pulled up or down):
+ * 	D0->16		D1->5		D2->4		D3->0(btu/flash)
+ *	D4->2(btu/TX1)	D5->14		D6->12		D7->13(RX2)
+ *	D8->15(btd/TX2)	D9->3(RX0)	D10->1(TX0)
+ * GPIO map:
+ * 	   0 -> D3: boot mode select, pull high
+ * 	   1 -> D10: TX0 to USB serial
+ * 	   2 -> D4: boot mode select, pull high (output at boot)
+ * 	   3 -> D9: RX0 to USB serial
+ * 	   4 -> D2: SDA
+ *	   5 -> D1: SCL
+ *	6-11 -> NC: flash
+ * 	  12 -> D6: MISO
+ * 	  13 -> D7: MOSI
+ * 	  14 -> D5: SPI_CLK
+ * 	  15 -> D8: boot mode select, pull down
+ * 	  16 -> D0: wake (connect to RST)
+ */
 #define RESET 16 /* D0 tied to RST line */
 #define LED_ONBOARD 2 /* D4 */
-#define INDUCTOR 0 /* D3 connected to 440ohm resistor to 120ohm coil for 6mA */
+#define INDUCTOR 14 /* D5 connected to 440ohm resistor to 120ohm coil for 6mA */
+#define TESTPIN 0 /* D3 can be pulled low to test */
 #define I2C_ADDR_SDA_SCL (0x78/2),5,4
 SSD1306Wire display(I2C_ADDR_SDA_SCL);
 
@@ -19,8 +38,9 @@ bool cbtime_set = false;
 
 enum correction_type {
   correction_null=0,
-  correction_hourly=8,  /* starts at XX:57:54 */
-  correction_daily=14,  /* starts at 05:57:54 */
+  correction_test=2,
+  correction_hourly=8,  /* from XX:57:54 to XX:58:02*/
+  correction_daily=14,  /* from YY:57:54 to YY:58:08 where YY=05 or 17 */
 };
 
 static void time_is_set (void) {
@@ -39,7 +59,8 @@ void setup() {
   pinMode(RESET,INPUT); /* allow programming when not sleeping */
   digitalWrite(INDUCTOR,LOW);
   pinMode(INDUCTOR,OUTPUT);
-  
+  pinMode(TESTPIN,INPUT_PULLUP);
+
   Serial.begin(115200);
 
   display.init();
@@ -90,28 +111,41 @@ static void correction_start(correction_type c) {
 }
 
 static void longwait(double seconds) {
-  Serial.print("Deep sleep for ");
-  Serial.println(seconds,1);
-  ESP.deepSleep(1e6*seconds);
 }
 
 static void donothing(void) {
   static int screensaver=0;
+  if (screensaver++ > 10) {
+    display.clear();
+    display.display();
+    if (screensaver > 15) screensaver=0;
+  }
+  
   led(true);
   delay(100);
   led(false);
   delay(2000);
-  if (screensaver++ > 60) {
-    display.clear();
-    display.display();
-    screensaver=0;
+}
+
+static void wait_ms(long int ms) {
+  long int deepsleep=20*1000;
+  if (ms > deepsleep) {
+    ms-=deepsleep;
+    Serial.print("Deep sleep for ");
+    Serial.println(1e-3*ms,3);
+    ESP.deepSleep(1e3*ms);
+    /* never gets here... */
+    delay(deepsleep);
+    return;
   }
+  delay(ms);
 }
 
 void loop() {
   static timeval nextaction;
   timeval tv;
   time_t now,next;
+  correction_type nexttype;
   struct tm tmloc,*tm;
   double wait;
   char tbuf[64];
@@ -126,6 +160,10 @@ void loop() {
   if (!cbtime_set) {
     Serial.println("no time callback");
     return donothing();
+  }
+
+  if (digitalRead(TESTPIN)==LOW) {
+	correction_start(correction_test);
   }
 
   wait=1;
@@ -154,49 +192,45 @@ void loop() {
     gettimeofday(&tv,nullptr);
     now=tv.tv_sec;
     tm=localtime_r(&now,&tmloc);
-
     next=now+30*60;
-    if (tm->tm_min <= 58 || (tm->tm_min == 58 && tm->tm_sec < 54)) {
-      tm->tm_sec=54;
-      tm->tm_min=58;
-      next=mktime(tm);
-      Serial.print("Next action at ");
-      Serial.print(ctime(&next));
-    }
+    nexttype=correction_null;
 
+    /* calculate next correction update */
+    #define SETMIN 57 /* should be 57 */
+    #define SETSEC 57 /* should be 54 */
+    tm->tm_hour+=(tm->tm_min > SETMIN || (tm->tm_min==SETMIN && tm->tm_sec > SETSEC))?+1:0;
+    tm->tm_min=SETMIN;
+    tm->tm_sec=SETSEC;
+    next=mktime(tm); /* mktime (3) spec normalizes tm back in to range (tm_hour) */
+    nexttype=((tm->tm_hour % 12)==5) ? correction_daily : correction_hourly;
+    Serial.print("Next action at ");
+    Serial.print(ctime(&next));
     wait=difftime(next,now); /* accurate to seconds */
     wait-=1e-6*tv.tv_usec; /* accurate to subseconds */
     
-    if (wait<-0.1) /* missed it... */ {wait=0; break;}
-    #if 0
-    if (wait > 200) {
-      longwait(wait-200);
+    /* Correction missed? */
+    if (wait < -0.25) {
+      Serial.print("Missed deadline by ");
+      Serial.println(wait,3);
+      wait=0;
       break;
     }
-    #endif
 
-    Serial.print("Waiting for ");
-    Serial.println(wait,3);
     if (wait < 1.5) {
-      if (wait>0) delay(1000*wait);
+      if (wait>0) wait_ms(1000*wait);
       wait=0;
-      switch(tm->tm_hour) {
-      case 5:
-      case 17:
-        correction_start(correction_daily);
-        break;
-      default:
-        correction_start(correction_hourly);
-        break;
-      }
+      correction_start(nexttype);
+      Serial.println("Correction started");
     }
 
   } while(0);
 
+  Serial.print("Waiting for ");
+  Serial.println(wait,3);
   double frac=wait - floor(wait);
-  if (frac>0.0) {delay(1000*frac); wait-=frac;}
+  if (frac>0.0) {wait_ms(1000*frac); wait-=frac;}
   if (frac>0.9) wait=0; /* waited enough */
-  delay((wait<1)?1000*wait:1000);
+  wait_ms((wait<1)?1000*wait:1000);
   Serial.println();
 }
 

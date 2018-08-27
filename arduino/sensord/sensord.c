@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <fcntl.h>
+#include <stdbool.h>
 
 #define SOCKLIBINCLUDES
 #include "socklib.h"
@@ -26,7 +27,6 @@
 
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define lengthof(x) (sizeof(x)/sizeof(*(x)))
-typedef unsigned int bool;
 
 /* HTTP headers */
 #define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8zu",LEN)
@@ -96,7 +96,7 @@ struct tempavg_s {
 	measurement n; /* number of items in list */
 	measurement avg; /* cache of mean calculation */
 };
-const struct tempavg_s tempavg_zero={NULL,0,MEASUREMENT_ZERO,MEASUREMENT_ZERO};
+static const struct tempavg_s tempavg_zero={NULL,0,MEASUREMENT_ZERO,MEASUREMENT_ZERO,MEASUREMENT_ZERO};
 
 struct probestate_s {
 	struct tempavg_s *probe;
@@ -373,14 +373,15 @@ static void processdata(struct probestate_s *s,struct tempdata_s *d) {
 struct server_s {
 	struct server_s *next,*prev;
 	int socket;
-	enum {
+	enum server_state {
 		server_reseting,
 		server_reading,
 		server_writing,
 		server_writinglast,
 		server_processing,
 		server_closing} state;
-	int count,buflen;
+	unsigned int count; /* count of server chars written */
+	unsigned int buflen; /* amount of buf[] used */
 	int idle;
 	#define URISPEC "%199s" /* stringify sizeof uri */
 	char uri[200];
@@ -421,16 +422,19 @@ static struct server_s *server_new(int socket) {
 	return sl;
 }
 
-static struct server_s *server_process(struct server_s *sl,bool readable,bool writable,struct probestate_s *s) {
+enum server_process_result {sl_ok,sl_close,sl_again};
+
+static enum server_process_result server_process(struct server_s *sl,bool readable,bool writable,struct probestate_s *s) {
 	char *crlf;
 	int tmp;
 	ssize_t r,w,send;
+	enum server_state enter_state=sl->state;
 	
 	switch(sl->state) {
 	case server_reading:
 		if (!readable) {sl->idle+=AVGTIME; break;}
 		r=read(sl->socket,sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen-1);
-		if (r==-1) {sl->state=server_closing; break;}
+		if (r==-1 || r<0) {sl->state=server_closing; break;}
 		sl->buflen+=r;
 		crlf=strstr(sl->buf,"\r\n\r\n"); /* buf is always terminated */
 		if (sl->buflen>=sizeof(sl->buf)-1 || r==0 || crlf) {
@@ -567,11 +571,13 @@ static struct server_s *server_process(struct server_s *sl,bool readable,bool wr
 	case server_closing:
 		/* will eventually get all of them */
 		TRACE(printf("CLOSING\n");)
-		sl->idle=300;
 		break;
 	}
-	if (sl->idle >= 300) return sl;
-	return NULL;
+	if (sl->idle >= 300) sl->state=server_closing;
+	
+	if (sl->state == server_closing) return sl_close;
+	if (sl->state != enter_state) return sl_again;
+	return sl_ok;
 }
 
 /* -- do stuff -- */
@@ -584,6 +590,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 	int tmp;
 	const char *e=NULL;
 	struct probestate_s probestate={NULL,0};
+	bool again;
 	
 	if (pp->fd==-1) return "bad data tty";
 	if (listenfd==-1) return "bad listening socket";
@@ -626,16 +633,30 @@ static const char *mainloop(int listenfd,probeport *pp) {
 			if (e) break;
 		}
 		/* process select()'s serverlist */
-		for_dll(serverlist,sl) {
-			bool readable=FD_ISSET(sl->socket,&readfds);
-			bool writable=FD_ISSET(sl->socket,&writefds);
-			closesl=server_process(sl,readable,writable,&probestate);
-		}
-		if (closesl) {
-			dll_remove(serverlist,closesl);
-			server_delete(closesl);
-			closesl=NULL;
-		}
+		do {
+			again=false;
+			for_dll(serverlist,sl) {
+				bool readable,writable;
+				enum server_process_result res;
+
+				readable=!!FD_ISSET(sl->socket,&readfds);  FD_CLR(sl->socket,&readfds);
+				writable=!!FD_ISSET(sl->socket,&writefds); FD_CLR(sl->socket,&writefds);
+				res=server_process(sl,readable,writable,&probestate);
+				switch(res) {
+				case sl_close: closesl=sl; break;
+				case sl_again: again=true; break;
+				case sl_ok:
+				default: break;
+				}
+			}
+			if (closesl) {
+				/* cannot remove server within for_dll() */
+				dll_remove(serverlist,closesl);
+				server_delete(closesl);
+				closesl=NULL;
+				again=true;
+			}
+		} while(again);
 	}
 	while(!dll_empty(serverlist))
 		dll_remove(serverlist,dll_head(serverlist));
