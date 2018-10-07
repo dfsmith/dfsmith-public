@@ -34,8 +34,6 @@ ESP8266WiFiMulti WIFIMULTIOBJECT;
 #define I2C_ADDR_SDA_SCL (0x78/2),5,4
 SSD1306Wire display(I2C_ADDR_SDA_SCL);
 
-bool cbtime_set = false;
-
 enum correction_type {
   correction_null=0,
   correction_test=2,
@@ -43,10 +41,14 @@ enum correction_type {
   correction_daily=14,  /* from YY:57:54 to YY:58:08 where YY=05 or 17 */
 };
 
+static timeval timevalid;
+
 static void time_is_set (void) {
+  /* keep time valid for 13 hours */
   tzset();
-  cbtime_set = true;
-  Serial.println("------------------ settimeofday() was called ------------------");
+  gettimeofday(&timevalid,nullptr);
+  timevalid.tv_sec+=13*60*60;
+  Serial.println("NTP time set");
 }
 
 static void led(bool on) {
@@ -73,7 +75,7 @@ void setup() {
   display.display();
   
   settimeofday_cb(time_is_set);
-  configTime(0,0,"timeserver.dfsmith.net");
+  configTime(0,0,"pool.ntp.org");
   setenv("TZ","PST8PDT",1);
   WiFi.mode(WIFI_STA);
   #include "smithnetac.h"
@@ -110,9 +112,6 @@ static void correction_start(correction_type c) {
   }
 }
 
-static void longwait(double seconds) {
-}
-
 static void donothing(void) {
   static int screensaver=0;
   if (screensaver++ > 10) {
@@ -141,42 +140,66 @@ static void wait_ms(long int ms) {
   delay(ms);
 }
 
+static bool correction_calc(struct tm *tm,time_t *next,long int *next_us,correction_type *nexttype) {
+  /* calculate next correction update */
+  /* takes tm and returns rm, next and nexttype */
+  #define SETMIN 56 /* should be 57 */
+  #define SETSEC 57 /* should be 54 */
+  #define SETUS 400000 /* should be 0 */
+  tm->tm_hour+=(tm->tm_min > SETMIN || (tm->tm_min==SETMIN && tm->tm_sec > SETSEC))?+1:0;
+  tm->tm_min=SETMIN;
+  tm->tm_sec=SETSEC;
+  *next_us=SETUS;
+  *next=mktime(tm); /* mktime (3) spec normalizes tm back in to range (tm_hour) */
+  *nexttype=((tm->tm_hour % 12)==5) ? correction_daily : correction_hourly;
+  return true;
+}
+
 void loop() {
-  static timeval nextaction;
   timeval tv;
   time_t now,next;
+  long int next_us;
   correction_type nexttype;
   struct tm tmloc,*tm;
   double wait;
   char tbuf[64];
+  wl_status_t wifi;
 
-  if (WIFIMULTIOBJECT.run()!=WL_CONNECTED) {
-    Serial.println("waiting for network");
-    return donothing();
-  }
-  Serial.println(WiFi.localIP());
+  wifi=WIFIMULTIOBJECT.run();
   correction_start(correction_null);
+  if (digitalRead(TESTPIN)==LOW) {
+    correction_start(correction_test);
+  }
 
-  if (!cbtime_set) {
-    Serial.println("no time callback");
+  /* is the time known? */
+  if (timevalid.tv_sec==0) {
+    Serial.println("no time available");
+    return donothing();
+  }
+  gettimeofday(&tv,nullptr);
+  if (tv.tv_sec > timevalid.tv_sec) {
+    Serial.println("time expired");
     return donothing();
   }
 
-  if (digitalRead(TESTPIN)==LOW) {
-	correction_start(correction_test);
-  }
-
+  /* main body */
   wait=1;
   do {
     /* time for display */
-    gettimeofday(&tv, nullptr);
-    now = tv.tv_sec;
+    now=tv.tv_sec;
     if (tv.tv_usec > 600000) now+=1;
     tm=localtime_r(&now,&tmloc);
     if (!tm) {Serial.println("invalid time"); break;}
 
     display.clear();
-    display.setFont(ArialMT_Plain_24);
+    if (wifi!=WL_CONNECTED) {
+      display.setFont(ArialMT_Plain_16);
+      Serial.println("waiting for network");
+    }
+    else {
+      display.setFont(ArialMT_Plain_24);
+      Serial.println(WiFi.localIP());
+    }
     snprintf(tbuf,sizeof(tbuf),"%02d:%02d:%02d",tm->tm_hour,tm->tm_min,tm->tm_sec);
     display.drawString(64,(tm->tm_min&1)?40:0,tbuf);
     display.setFont(ArialMT_Plain_16);
@@ -188,34 +211,30 @@ void loop() {
     Serial.print("Fractional seconds ");
     Serial.println(1e-6*tv.tv_usec,3);
 
-    /* time for correction */
+    /* calculate how much to wait until next correction */
     gettimeofday(&tv,nullptr);
     now=tv.tv_sec;
     tm=localtime_r(&now,&tmloc);
-    next=now+30*60;
-    nexttype=correction_null;
-
-    /* calculate next correction update */
-    #define SETMIN 57 /* should be 57 */
-    #define SETSEC 57 /* should be 54 */
-    tm->tm_hour+=(tm->tm_min > SETMIN || (tm->tm_min==SETMIN && tm->tm_sec > SETSEC))?+1:0;
-    tm->tm_min=SETMIN;
-    tm->tm_sec=SETSEC;
-    next=mktime(tm); /* mktime (3) spec normalizes tm back in to range (tm_hour) */
-    nexttype=((tm->tm_hour % 12)==5) ? correction_daily : correction_hourly;
+    if (!correction_calc(tm,&next,&next_us,&nexttype)) {
+      next=now+30*60;
+      next_us=0;
+      nexttype=correction_null;
+    }
     Serial.print("Next action at ");
     Serial.print(ctime(&next));
     wait=difftime(next,now); /* accurate to seconds */
     wait-=1e-6*tv.tv_usec; /* accurate to subseconds */
+    wait+=1e-6*next_us;
     
-    /* Correction missed? */
+    /* correction missed? */
     if (wait < -0.25) {
       Serial.print("Missed deadline by ");
       Serial.println(wait,3);
       wait=0;
-      break;
+      break; /* don't correct */
     }
 
+    /* do correction if close*/
     if (wait < 1.5) {
       if (wait>0) wait_ms(1000*wait);
       wait=0;
