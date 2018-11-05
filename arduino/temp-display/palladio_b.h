@@ -1,6 +1,6 @@
 // Created by http://oleddisplay.squix.ch/ Consider a donation
 // In case of problems make sure that you are using the font file with the correct version!
-const char URW_Palladio_L_Bold_10[] PROGMEM = {
+const uint8_t URW_Palladio_L_Bold_10[] PROGMEM = {
   0x0A, // Width: 10
   0x0D, // Height: 13
   0x20, // First Char: 32
@@ -426,7 +426,7 @@ const char URW_Palladio_L_Bold_10[] PROGMEM = {
 
 // Created by http://oleddisplay.squix.ch/ Consider a donation
 // In case of problems make sure that you are using the font file with the correct version!
-const char URW_Palladio_L_Bold_16[] PROGMEM = {
+const uint8_t URW_Palladio_L_Bold_16[] PROGMEM = {
   0x10, // Width: 16
   0x15, // Height: 21
   0x20, // First Char: 32

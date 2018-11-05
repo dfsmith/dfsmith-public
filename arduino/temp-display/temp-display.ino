@@ -1,37 +1,12 @@
-/**
- * The MIT License (MIT)
- *
- * Copyright (c) 2016 by Daniel Eichhorn
- * Copyright (c) 2016 by Fabrice Weinberg
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- */
 #include <time.h>
 #include "SSD1306.h"
 #include "OLEDDisplayUi.h"
 #include "palladio_b.h"
 #include "images.h"
 
-#include <WiFi.h>
 #include <WiFiMulti.h>
 #include <HTTPClient.h>
+#include <ArduinoOTA.h>
 
 #define lengthof(X) (sizeof(X)/sizeof(*(X)))
 #define DEGREES "\u00B0"
@@ -39,8 +14,8 @@
 WiFiMulti wifiMulti;
 SSD1306 oleddisplay(0x3c,5,4);
 OLEDDisplayUi ui(&oleddisplay);
-static const int screenbottom=DISPLAY_HEIGHT;
-static const int screenright=DISPLAY_WIDTH;
+static const int screenbottom=oleddisplay.getHeight();
+static const int screenright=oleddisplay.getWidth();
 
 static float CtoF(float degC) {
   return 32.0+(9.0/5)*degC;
@@ -74,7 +49,8 @@ class minilog {
   typedef uint16_t ytype;
   const ytype LOGNAN=65535;
   int interval; /* time_t units */
-  ytype y[DISPLAY_WIDTH-12];
+  ytype *y;
+  int ylen;
   int logoffset; /* next empty y slot */
   time_t lastlog;
   time_t lastrescale;
@@ -83,10 +59,16 @@ class minilog {
   minilog(int seconds) {
     clear();
     interval=seconds;
+    ylen=screenright-12;
+    y=new ytype[ylen];
+  }
+
+  ~minilog() {
+    delete y;
   }
 
   int entries() {
-    return lengthof(y);
+    return ylen;
   }
 
   void clear() {
@@ -197,14 +179,16 @@ class probeinfo {
       
     do {
       /* break to flash the screen! */
-      if (isnormal(val[0].relh ) && val[0].relh  > 45.0) break;
       if (isnormal(val[3].state) && val[3].state < 0.99) {
-          /* change garage header */
-          val[2].msg="Open";
-          break;
+        /* change garage header */
+        val[2].msg="open";
+        break;
       }
+      val[2].msg="closed";
 
-      val[2].msg="Closed";
+      if (isnormal(val[0].relh ) && val[0].relh  > 45.0)
+        break;
+      
       if (alert) Serial.println("Alert cleared");
       clearalert();
       return;
@@ -464,9 +448,54 @@ int frameCount=lengthof(frames);
 OverlayCallback overlays[]={drawoverlay};
 int overlaysCount=lengthof(overlays);
 
+static void setupOTA() {
+  Serial.println("Finding network");
+  if(wifiMulti.run() == WL_CONNECTED) {
+    Serial.println("WiFi connected");
+  }
+
+  // ArduinoOTA.setPort(3232);
+  // ArduinoOTA.setPassword("admin");
+
+  ArduinoOTA
+    .onStart([]() {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH)
+        type = "sketch";
+      else // U_SPIFFS
+        type = "filesystem";
+
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      Serial.println("Start updating " + type);
+    })
+    .onEnd([]() {
+      Serial.println("\nEnd");
+    })
+    .onProgress([](unsigned int progress, unsigned int total) {
+      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    })
+    .onError([](ota_error_t error) {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+  ArduinoOTA.begin();
+  Serial.print("OTA IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting code");
+
+  oleddisplay.init();
+  oleddisplay.setContrast(255);
+  oleddisplay.clear();
+  oleddisplay.drawRect(screenright/2-10,screenbottom/2-10,20,20);
+  oleddisplay.display();
 
   /* display init */
   ui.setTargetFPS(30);
@@ -481,8 +510,8 @@ void setup() {
   oleddisplay.flipScreenVertically();
 
   /* network init */
-  #define WIFIMULTIOBJECT wifiMulti
-  #include "smithnetac.h"
+  #include "../../../smithnetac.h"
+  setupOTA();
 
   /* data init */
   for(int i=0;i<lengthof(probename);i++) {
@@ -498,16 +527,16 @@ void setup() {
 
 void loop() {
   static unsigned long int next=0,validuntil=0;
-  static bool wasconnected=false;
   uint8_t /*wl_status_t*/ wifistatus;
 
   int remainingTimeBudget=ui.update();
   unsigned long int start=millis();
 
   wifistatus=wifiMulti.run();
+  ArduinoOTA.handle();
+
   if (wifistatus==WL_CONNECTED && start>next) {
     HTTPClient http;
-    wasconnected=true;
 
     Serial.println("Gather...");
     http.begin("http://dfsmith.net:8888/measurementlines");
@@ -525,9 +554,12 @@ void loop() {
   if (start > validuntil) probes.clear();
 
   /* poor man's watchdog */
-  if (wasconnected && wifistatus!=WL_CONNECTED) {
+  if (wifistatus!=WL_CONNECTED && millis()>30000) {
     //esp_wifi_wps_disable();
-    ESP.restart();
+    //ESP.restart();
+    WiFi.mode(WIFI_OFF);
+    delay(5000);
+    WiFi.mode(WIFI_STA);
   }
 
   unsigned long int stop=millis();
