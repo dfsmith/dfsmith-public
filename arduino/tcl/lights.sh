@@ -63,7 +63,7 @@ appropriate() {
 		;;
 	12)	# Christmas
 		start=1600; stop=2330
-		pattern=6 # Random color sparkles
+		pattern=4 # blinking sparkles
 		;;
 	*)	start=0; stop=0
 		pattern=off
@@ -93,6 +93,9 @@ dummy)
 	;;
 appropriate)
 	lights `appropriate`
+	;;
+showappropriate)
+	echo "lights `appropriate`"
 	;;
 *)
 	lights $*
