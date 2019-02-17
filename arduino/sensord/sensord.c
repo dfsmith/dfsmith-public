@@ -29,13 +29,27 @@
 #define lengthof(x) (sizeof(x)/sizeof(*(x)))
 
 /* HTTP headers */
-#define HEADER_OK_SET_CONTENTLENGTH(H,LEN) sprintf((H)+33,"%8zu",LEN)
-const char header_ok[]="HTTP/1.1 200 OK\r\nContent-Length: 00000000\r\n"
+#define CONTENTLEN "<CONTLEN>"
+const char header_ok[]="HTTP/1.1 200 OK\r\nContent-Length: "CONTENTLEN"\r\n"
                        "Access-Control-Allow-Origin: *\r\n"
                        "Content-Type: text/plain\r\n\r\n";
 const char header_bad[]="HTTP/1.1 400 Bad request\r\n\r\n";
 const char header_notfound[]="HTTP/1.1 404 Not found\r\n\r\n";
 const char header_error[]="HTTP/1.1 500 Internal error\r\n\r\n";
+
+static int overtypeint(char *s,const char *match,int val) {
+	int len,r;
+	char *p;
+	char tmp[16];
+	
+	p=strstr(s,match);
+	if (!p) return -1;
+	len=strlen(match);
+	memset(p,' ',len);
+	r=snprintf(tmp,sizeof(tmp),"%d",val);
+	memcpy(p,tmp,r);
+	return r;
+}
 
 /* -- doubly linked circular lists -- */
 
@@ -462,7 +476,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 				sl->buflen+=snprintf(sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen,__VA_ARGS__); \
 			} while(0)
 		#define OUT_OK() do { \
-				HEADER_OK_SET_CONTENTLENGTH(sl->buf,sl->buflen-sizeof(header_ok)+1); \
+				overtypeint(sl->buf,CONTENTLEN,sl->buflen-sizeof(header_ok)+1); \
 				sl->state=server_writing; \
 			} while(0)
 		#define OUT_NOK() (sl->state=server_writinglast)
@@ -479,7 +493,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		}
 		TRACE(printf("PROCESSING: %s\n",sl->uri);)
 		if (strcmp(sl->uri,"/")==0) {
-			OUT("%s# temperature server\r\n# probeline probe degC %%rh state\r\n",header_ok);
+			OUT("%s# temperature server\r\n# probes probeline probe measurementline degC %%rh state localtime\r\n",header_ok);
 			OUT_OK();
 			break;
 		}
