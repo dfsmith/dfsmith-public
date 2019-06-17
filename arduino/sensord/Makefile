@@ -1,7 +1,7 @@
 LIBDIR=$(HOME)/c/lib
-CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR)
+CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR) -DTEST
 
-sensord: sensord.o $(LIBDIR)/socklib.o
+sensord: sensord.o
 
 clean:
 	rm -f *.o sensord
