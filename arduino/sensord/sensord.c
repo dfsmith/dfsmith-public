@@ -103,10 +103,10 @@ static double timenow(void) {
 typedef struct {
 	double time;
 	double temp;
-	double rh;	
+	double rh;
 	double pressure;
 	double state;
-	
+
 	uint havetime:1;
 	uint havetemp:1;
 	uint haverh:1;
@@ -228,10 +228,10 @@ static void probe_delete(probeport *pp) {
 static probeport *probe_new(const char *probename,int maxlinelen) {
 	probeport *pp;
 	int fd;
-	
+
 	fd=open(probename,O_RDONLY);
 	if (fd==-1) return NULL;
-	
+
 	pp=malloc(sizeof(*pp)+maxlinelen);
 	if (!pp) return NULL;
 	pp->fd=fd;
@@ -247,7 +247,7 @@ static int decodedata(probeport *p) {
 	/* returns number of new data items (1 or 0) or error (-1) */
 	char *l=p->line,*e;
 	double x;
-	
+
 	//DBG(printf("decodedata:in \"%s\"\n",l);)
 
 	if (l[0]=='\0') {
@@ -264,7 +264,7 @@ static int decodedata(probeport *p) {
 		p->data.probe=strtol(l,&e,0);
 		if (e==l) return 0; /* malformed */
 		l=e+1;
-		
+
 		p->data.m=measurement_null;
 		while(*l) {
 			/* fix next data string */
@@ -297,7 +297,7 @@ static struct probedata_s *readmoredata(probeport *p,const char **error) {
 	struct probedata_s *r=NULL;
 	const char *err=NULL;
 	int max;
-	
+
 	do {
 		start=&p->line[p->current];
 		max=p->max - p->current-1;
@@ -397,7 +397,7 @@ static void combineavg(struct probeavg_s *p,struct probedata_s *newdata) {
 	measurementop(&d->m,  '-',&p->offset,0);
 	ADD()
 	dll_addhead(p->list,d);
-	
+
 	/* calculate mean */
 	p->avg=p->sum;
 	measurementop(&p->avg,'/',&p->n,0);
@@ -489,7 +489,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 	int tmp;
 	ssize_t r,w,send;
 	enum server_state enter_state=sl->state;
-	
+
 	switch(sl->state) {
 	case server_reading:
 		if (!readable) {sl->idle+=AVGTIME; break;}
@@ -631,7 +631,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		break;
 	}
 	if (sl->idle >= 300) sl->state=server_closing;
-	
+
 	if (sl->state == server_closing) return sl_close;
 	if (sl->state != enter_state) return sl_again;
 	return sl_ok;
@@ -640,8 +640,8 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 int tcpport(struct in_addr interface,int port) {
 	struct sockaddr_in sa;
 	int ss;
-	int one=1;	
-	
+	int one=1;
+
 	do {
 		ss=socket(PF_INET,SOCK_STREAM,IPPROTO_TCP);
 		if (ss==-1) break;
@@ -670,10 +670,10 @@ static const char *mainloop(int listenfd,probeport *pp) {
 	const char *e=NULL;
 	struct probestate_s probestate={0,NULL};
 	bool again;
-	
+
 	if (pp->fd==-1) return "bad data tty";
 	if (listenfd==-1) return "bad listening socket";
-	
+
 	for(;;) {
 		/* set up select() */
 		timeout.tv_sec=AVGTIME;
@@ -719,7 +719,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 
 				readable=!!FD_ISSET(sl->socket,&readfds);  FD_CLR(sl->socket,&readfds);
 				writable=!!FD_ISSET(sl->socket,&writefds); FD_CLR(sl->socket,&writefds);
-				
+
 				res=server_process(sl,readable,writable,&probestate);
 				switch(res) {
 				case sl_close: closesl=sl; break;
@@ -777,10 +777,10 @@ int main(int argc,char *argv[]) {
 		e=mainloop(ss,pp);
 		if (e) e2=strerror(errno);
 	} while(0);
-	
+
 	if (pp) probe_delete(pp);
 	if (ss!=-1) close(ss);
-	
+
 	if (e) {
 		if (e2) fprintf(stderr,"%s: %s (%s)\n",progname,e,e2);
 		else    fprintf(stderr,"%s: %s\n",progname,e);

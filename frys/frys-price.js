@@ -27,7 +27,7 @@ function frys_link(plu) {
 
 function frys_title() {
 	var tt;
-	tt=casper.getHTML('#ProductName .product_title b');
+	tt=casper.getHTML('h3.product-title strong');
 	log("Title: "+tt);
 	if (!tt) {
 		tt=casper.getHTML('#ProductName .product_title');
@@ -37,7 +37,8 @@ function frys_title() {
 }
 
 function frys_price() {
-	var pp=casper.getHTML('div#product_price_holder .productPrice label');
+	//var pp=casper.getHTML('div#product_price_holder .productPrice label');
+	var pp=casper.getHTML('span#did_price1valuediv');
 	log("Price: "+pp);
 	return pp;
 }
