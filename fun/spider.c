@@ -23,6 +23,14 @@ struct tableau_s;
 typedef struct tableau_s tableau;
 struct global_s;
 typedef struct global_s global;
+struct vistab_s;
+typedef struct vistab_s vistab;
+
+struct vistab_s {
+	const vistab *nexthash;
+	int cards;
+	card c[];
+};
 
 struct tableau_s {
 	stack deck;
@@ -32,12 +40,11 @@ struct tableau_s {
 	hash hash;
 	global *global;
 	const tableau *prev;
-	const tableau *nexthash;
 	int depth;
 };
 
 struct global_s {
-	tableau *tabtab[HASHTABSIZE];
+	vistab *tabtab[HASHTABSIZE];
 	tableau *first;
 };
 
@@ -58,7 +65,7 @@ static int stacknum(const tableau *t,const stack *s) {
 	n = s - t->home;
 	if (n>=0 && n<8) return STACKS+n+1;
 	return -1;
-}	
+}
 
 static const char *cardtotext(card c) {
 	static char n[3];
@@ -76,7 +83,7 @@ static const char *cardtotext(card c) {
 static const char *stackcardtotext(const stack *s,int i,char mark) {
 	static char n[5];
 	const char *c;
-	
+
 	if (i==-1) {
 		snprintf(n,sizeof(n),"%d/%d",s->pickable,s->hidden);
 		return n;
@@ -107,7 +114,7 @@ static void showtableau(const tableau *t) {
 	int i,j,n;
 	const stack *s,*ps;
 	char mark;
-	
+
 	if (!t) {
 		printf("No tableau\n");
 		return;
@@ -137,12 +144,14 @@ static void showtableau(const tableau *t) {
 	printf("\n");
 }
 
+#if 0
 static void showstack(const stack *s) {
 	int i;
 	for(i=0;i<s->n;i++)
 		printf("%s",stackcardtotext(s,i,'\0'));
 	printf("\n");
 }
+#endif
 
 static void err(const tableau *t,const char *s) {
 	static bool disabled=false;
@@ -211,7 +220,7 @@ static int pickable(const stack *s) {
 	card c,d;
 	int p;
 	int visible;
-	
+
 	visible = s->n - s->hidden;
 	if (visible <= 1) return 1;
 	c=topcard(s);
@@ -280,7 +289,7 @@ static bool movecards(tableau *t,stack *dst,stack *src,int n,bool force) {
 		s = src->c[from];
 		if (s==-1) err(t,"bad card\n");
 		dst->c[to] = s;
-		dst->n++;		
+		dst->n++;
 	}
 	src->n-=n;
 	t->hash = newhash;
@@ -298,11 +307,12 @@ static bool movecards(tableau *t,stack *dst,stack *src,int n,bool force) {
 	dst->pickable=pickable(dst);
 	if (dst->pickable==12) {
 		movecards(t,&t->home[t->nhome++],dst,dst->pickable,true);
-		err(t,"got a stack!\n");
+		err(t,"got a 12 stack!\n");
 	}
 	return true;
 }
 
+#if 0
 static bool matchtableau(const tableau *t1,const tableau *t2) {
 	const stack *s1,*s2;
 	int i,j;
@@ -320,30 +330,62 @@ static bool matchtableau(const tableau *t1,const tableau *t2) {
 	}
 	return true;
 }
+#endif
 
-static const tableau *findorinserttableau(const tableau *t) {
-	hash h;
-	tableau *t2;
-	const tableau *ht;
-	global *g=t->global;
-	static size_t alloced=0;
-	
-	h=t->hash % HASHTABSIZE;
-	for(ht=g->tabtab[h];ht;ht=ht->nexthash) {
-		if (matchtableau(ht,t)) return ht;
+static vistab *newvistab(const tableau *t) {
+	vistab *v;
+	size_t s;
+	card *c;
+	static size_t totals=0;
+	int n=0,i,j;
+
+	for(i=0;i<STACKS;i++) {
+		n+=1 + t->s[i].n - t->s[i].hidden;
 	}
-	alloced+=sizeof(*t2);
-	if (alloced > 4000000000) err(t,"too many patterns\n");
-	t2=malloc(sizeof(*t2));
-	*t2=*t;
-	t2->prev=NULL;
-	t2->nexthash=g->tabtab[h];
-	g->tabtab[h]=t2;
-	return NULL;
+	s=sizeof(*v) + sizeof(*v->c)*n;
+	totals+=s;
+	if (s>10000000000) err(t,"too many patterns\n");
+	v=malloc(s);
+	v->cards=n;
+
+	c=v->c;
+	for(i=0;i<STACKS;i++) {
+		const stack *s=&t->s[i];
+		for(j=s->hidden;j<s->n;j++) {
+			*c++ = s->c[j];
+		}
+		*c++ = -1;
+	}
+	return v;
+}
+
+static bool matchvistab(const vistab *v1,const vistab *v2) {
+	if (v2->cards != v1->cards) return false;
+	if (memcmp(v2->c,v1->c,v1->cards * sizeof(*v1->c))!=0) return false;
+	return true;
+}
+
+static bool findorinserttableau(const tableau *t) {
+	hash h;
+	vistab *v;
+	const vistab *hv;
+	global *g=t->global;
+
+	v=newvistab(t);
+	h=t->hash % HASHTABSIZE;
+	/* find? */
+	for(hv=g->tabtab[h];hv;hv=hv->nexthash) {
+		if (matchvistab(hv,v)) {free(v); return true;}
+	}
+
+	/* no... insert */
+	v->nexthash=g->tabtab[h];
+	g->tabtab[h]=v;
+	return false;
 }
 
 static bool wins(const tableau *t1) {
-	tableau *t2;
+	tableau newtableau,*t2=&newtableau;
 	stack *src,*dst;
 	int i,j,n;
 	#define copyt(T2,T1) do{*(T2)=*(T1); (T2)->prev=(T1); (T2)->depth++;} while(0)
@@ -351,11 +393,10 @@ static bool wins(const tableau *t1) {
 	if (findorinserttableau(t1)) {
 		return false;
 	}
-	if (t1->depth > 11) return false;
+	if (t1->depth > 12) return false;
 
 	if (won(t1))
 		return true;
-	t2=malloc(sizeof(*t2));
 	copyt(t2,t1);
 
 	/* deal */
@@ -365,7 +406,6 @@ static bool wins(const tableau *t1) {
 			if (!movecards(t2,dst,&t2->deck,1,true)) break;
 		}
 		if (wins(t2)) {
-			free(t2);
 			return true;
 		}
 	}
@@ -374,7 +414,8 @@ static bool wins(const tableau *t1) {
 
 	/* try a move */
 	for(i=0;i<STACKS;i++) {
-if (t1->depth < 3) {printf("depth %d stack %d\n",t1->depth,i);}
+if (t1->depth < 5) {printf("depth %.*s%d stack %d\n",t1->depth,"         ",t1->depth,i);}
+if (t1->depth < 2) {showtableau(t2);}
 		for(j=0;j<STACKS;j++) {
 			if (i==j) continue;
 			src=&t2->s[i];
@@ -382,7 +423,6 @@ if (t1->depth < 3) {printf("depth %d stack %d\n",t1->depth,i);}
 			for(n=1;n <= src->pickable;n++) {
 				if (movecards(t2,dst,src,n,false)) {
 					if (wins(t2)) {
-						free(t2);
 						return true;
 					}
 					/* that move didn't win... reset */
@@ -391,7 +431,6 @@ if (t1->depth < 3) {printf("depth %d stack %d\n",t1->depth,i);}
 			}
 		}
 	}
-	free(t2);
 	return false;
 }
 
@@ -417,7 +456,7 @@ int main(void) {
 	const char *p;
 	stack *deck;
 	int i;
-	
+
 	t=calloc(1,sizeof(*t));
 	g=calloc(1,sizeof(*g));
 	g->first=t;
@@ -444,7 +483,7 @@ int main(void) {
 	deck->pickable=1;
 	deck->hidden=deck->n;
 	//showstack(deck);
-	
+
 	/* deal initial tableau */
 	err(NULL,NULL);
 	for(i=0;i<54;i++) {
@@ -464,30 +503,31 @@ int main(void) {
 	/* play */
 	if (wins(t)) printf("Yay!\n");
 	else printf("Boo!\n");
-	
+
+	/* stats */
 	hash maxhash=0;
 	int chain,maxchain=0;
 	int used=0;
 	int maxchainloc=0;
-	const tableau *t2;
+	const vistab *v;
 	for(i=0;i<HASHTABSIZE;i++) {
-		t2=g->tabtab[i];
+		v=g->tabtab[i];
 		chain=0;
-		while(t2) {
-			void *tt2=(void*)t2;
-			if (t2->hash > maxhash) maxhash=t2->hash;
-			t2=t2->nexthash;
-			free(tt2);
+		while(v) {
+			const vistab *v2=v;
+			v=v->nexthash;
+			free((void*)v2);
 			used++;
 			chain++;
 		}
 		if (chain > maxchain) {maxchain=chain; maxchainloc=i;}
 	}
-	printf("Hash table %d/%d filled, maxhash=%u\n",used,HASHTABSIZE,maxhash);
+	printf("Hash table %d/%d filled (%gx), maxhash=%u\n",
+	  used,HASHTABSIZE,(double)used/HASHTABSIZE,maxhash);
 	printf("Longest chain: %d at %d\n",maxchain,maxchainloc);
 	printf("Size of tableau: %zu (max %zu bytes)\n",
 		sizeof(*t),sizeof(*t)*maxhash);
-	
+
 	free(t);
 	free(g);
 	return 0;
