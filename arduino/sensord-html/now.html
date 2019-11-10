@@ -88,7 +88,8 @@ function displaydata() {
 function getdata() {
 	if (!window.XMLHttpRequest) {return;}
 	rq.onreadystatechange=displaydata;
-	rq.open("GET","http://www.dfsmith.net:8888/measurementlines");
+	//rq.open("GET","http://www.dfsmith.net:8888/measurementlines");
+	rq.open("GET","data/measurementlines");
 	rq.send();
 }		
 	
