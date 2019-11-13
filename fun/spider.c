@@ -4,47 +4,21 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define lengthof(X) (sizeof(X)/sizeof(*(X)))
+#define lengthof(X) ((int)(sizeof(X)/sizeof(*(X))))
 #define STACKS 10
 #define HASHTABSIZE 150000
 
-static int checkpoint_dest[]={-1,
-	-1,-1,-1,-1, 4, 8, 1, 2, 2, 5,
-         1, 6, 6, 2, 1, 2, 7, 6, 5, 8,
-	 2, 1, 7, 8,-1, 1, 8, 3, 7, 1,
-	 4, 3, 4, 1, 4, 3, 4, 1, 8, 3,
-	 5, 1, 6, 0, 0, 3, 0, 1, 1, 1,
-	 4, 0, 0, 5, 0, 0, 4, 0, 0, 5,
-	 0, 6, 7, 1, 1, 6, 9, 5, 1, 7,
-	 6, 4, 6, 1, 1, 1, 1, 4, 5, 5,
-	 6, 7, 6, 6, 4, 9, 6, 5, 5, 5,
-	 9, 8, 5, 8, 5, 9, 1, 7, 5, 1,
-};
-static int checkpoint_src[]={-1,
-	-1,-1,-1,-1, 2, 2, 2, 6, 1, 6,
-	 2, 2, 1, 1, 8, 6, 5, 2, 7, 1,
-	 0, 8, 5, 1,-1, 8, 7, 1, 5, 3,
-	 5, 1, 5, 3, 7, 1, 9, 3, 5, 1,
-	 7, 3, 5, 5, 1, 0, 5, 5, 8, 6,
-	 0, 5, 4, 0, 4, 5, 0, 5, 4, 0,
-	 2, 1, 6, 6, 7, 1, 5, 4, 6, 4,
-	 1, 6, 7, 7, 4, 6, 5, 6, 1, 9,
-	 4, 1, 1, 7, 1, 1, 5, 1, 9, 4,
-	 5, 5, 8, 4, 9, 8, 4, 6, 6, 8,
-};
-static int checkpoint_n[]={-1,
-	-1,-1,-1,-1, 1, 1, 1, 1, 1, 1,
-	 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-	 1, 1, 1, 1,-1, 1, 1, 1, 1, 1,
-	 2, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-	 1, 1, 2, 1, 2, 1, 1, 1, 2, 2,
-	 3, 1, 2, 3, 1, 2, 3, 1, 2, 1,
-	 1, 2, 1, 1, 1, 2, 1, 2, 2, 2,
-	 2, 1, 2, 1, 1, 1, 2, 1, 1, 2,
-	 1, 1, 1, 1, 1, 1, 3, 2, 1, 1,
-	 2, 2, 1, 2, 2, 1, 1, 4, 1, 1,
-};
+typedef struct {
+	int dest,src,n;
+} move;
+
+#include "spidercheck.h"
+#ifdef CHECKPOINT
 static bool seeking=true;
+#else
+static bool seeking=false;
+static move checkpoint[]={{-1,-1,-1},};
+#endif
 
 typedef signed char card;
 
@@ -76,9 +50,7 @@ struct tableau_s {
 	int depth;
 
 	const tableau *prev;
-	int lastsrc;
-	int lastdest;
-	int lastn;
+	move last;
 };
 
 struct global_s {
@@ -87,6 +59,7 @@ struct global_s {
 	int maxdepth;
 	unsigned int matched,unmatched;
 	long long int playscount;
+	bool seeking;
 
 	/* own malloc */
 	char *memblock;
@@ -188,8 +161,8 @@ static void showtableau(const tableau *t,FILE *f) {
 		case 1: fprintf(f,"    Cards in deck: %d\n",t->deck.n); break;
 		case 2: fprintf(f,"    Depth: %d\n",t->depth); break;
 		case 3:
-			if (t->lastn==-1) fprintf(f,"    Move: deal\n");
-			else fprintf(f,"    Move: %d from %d->%d\n",t->lastn,t->lastsrc,t->lastdest);
+			if (t->last.n==-1) fprintf(f,"    Move: deal\n");
+			else fprintf(f,"    Move: %d from %d->%d\n",t->last.n,t->last.src,t->last.dest);
 			break;
 		default: fprintf(f,"\n"); n--; break;
 		}
@@ -349,7 +322,7 @@ static void analysis(global *g) {
 	int used=0,entries=0;
 	int maxchainloc=0;
 	const vistab *v;
-	int i;
+	unsigned int i;
 
 	for(i=0;i<HASHTABSIZE;i++) {
 		v=g->tabtab[i];
@@ -452,7 +425,6 @@ static bool findorinserttableau(const tableau *t) {
 	global *g=t->global;
 
 	v=newvistab(t,&hash);
-if (hash==251562) showtableau(t,NULL);
 	h=hash % HASHTABSIZE;
 	/* find? */
 	for(hv=g->tabtab[h];hv;hv=hv->nexthash) {
@@ -483,8 +455,8 @@ static void playforward(const tableau *t1,void (*func)(const tableau *,void *,in
 
 static void printdest(const tableau *t,void *vf,int d) {
 	FILE *f=vf;
-	if (t->lastdest==-1) fprintf(f,"D");
-	else fprintf(f,"%d",t->lastdest);
+	if (t->last.dest==-1) fprintf(f,"D");
+	else fprintf(f,"%d",t->last.dest);
 }
 
 static void showstatus(const tableau *t1) {
@@ -499,7 +471,7 @@ static void printmove(const tableau *t,void *vf,int d) {
 	FILE *f=vf;
 	if (d==0) return;
 	d--;
-	fprintf(f,"{%d,%d,%d},",t->lastdest,t->lastsrc,t->lastn);
+	fprintf(f,"{%d,%d,%d},",t->last.dest,t->last.src,t->last.n);
 	if (d%10==9) fprintf(f,"\n");
 }
 
@@ -510,18 +482,21 @@ static void showcheckpoint(const tableau *t1,bool record) {
 	FILE *f;
 
 	if (record) {
-		snprintf(filename,sizeof(filename),"spidercheck-%d",count++);
-		if (count>4) count=0;
+		snprintf(filename,sizeof(filename),"spidercheck-%d.h",count++);
+		if (count>=4) count=0;
 		f=fopen(filename,"w");
 		if (!f) f=stdout;
 		printf("checkpointing...\n");
+		fprintf(f,"/*\n");
 		showrewind(t1,f);
 	}
 	else
 		f=stdout;
 
 	fprintf(f,"Checkpoint at %llu plays, depth=%d\n",t1->global->playscount,t1->depth);
-	fprintf(f,"move checkpoint[]={\n");
+	fprintf(f,"*/\n");
+	fprintf(f,"#define CHECKPOINT checkpoint\n");
+	fprintf(f,"static move checkpoint[]={ {-1,-1,-1}, /* initial deal */\n");
 	playforward(t1,printmove,f);
 	fprintf(f,"};\n");
 	if (f!=stdout) fclose(f);
@@ -533,18 +508,18 @@ static bool wins(const tableau *t1) {
 	int i,j,n;
 	#define copyt(T2,T1) do{*(T2)=*(T1); (T2)->prev=(T1); (T2)->depth++;} while(0)
 
-	if (seeking) {
+	if (t1->global->seeking) {
 		int d=t1->depth;
-		if (d >= lengthof(checkpoint_dest)) {
-			seeking=false;
+		if (d >= lengthof(checkpoint)) {
+			t1->global->seeking=false;
 			return false;
 		}
 		showcheckpoint(t1,false);
-		if (t1->lastdest != checkpoint_dest[d])
+		if (t1->last.dest != checkpoint[d].dest)
 			return false;
-		if (t1->lastsrc != checkpoint_src[d])
+		if (t1->last.src != checkpoint[d].src)
 			return false;
-		if (t1->lastn != checkpoint_n[d])
+		if (t1->last.n != checkpoint[d].n)
 			return false;
 	}
 	else if (findorinserttableau(t1)) {
@@ -560,9 +535,9 @@ static bool wins(const tableau *t1) {
 	if ((t1->global->playscount & (1024*1024*4-1))==0) showcheckpoint(t1,true);
 
 	copyt(t2,t1);
-	t2->lastsrc=-1;
-	t2->lastdest=-1;
-	t2->lastn=-1;
+	t2->last.src=-1;
+	t2->last.dest=-1;
+	t2->last.n=-1;
 
 	/* deal */
 	if (t2->deck.n >= STACKS) {
@@ -585,24 +560,24 @@ static bool wins(const tableau *t1) {
 			const tableau *t;
 			printf("depth %.*s%d stack %d",t1->depth,"         ",t1->depth,i);
 			for(t=t1; t->prev; t=t->prev) {
-				if (t->lastdest==-1) printf(", deal");
-				else printf(", %d",t->lastdest);
+				if (t->last.dest==-1) printf(", deal");
+				else printf(", %d",t->last.dest);
 			}
 			printf("\n");
 			showtableau(t1,NULL);
 		}
 
-		t2->lastdest=i;
+		t2->last.dest=i;
 
 		for(j=0;j<STACKS;j++) /* src stack */ {
 			if (i==j) continue;
 			dst=&t2->s[i];
 			src=&t2->s[j];
-			t2->lastsrc=j;
+			t2->last.src=j;
 			for(n = src->pickable;n>0;n--) {
-				t2->lastn=n;
+				t2->last.n=n;
 
-				if (t1->lastdest == t2->lastsrc && t1->lastn == t2->lastn)
+				if (t1->last.dest == t2->last.src && t1->last.n == t2->last.n)
 				  continue;
 
 				if (movecards(t2,dst,src,n,false)) {
@@ -657,6 +632,7 @@ int main(void) {
 
 	memset(g,0,sizeof(*g));
 	memset(t,0,sizeof(*t));
+	g->seeking=seeking;
 	g->first=t;
 	g->maxmem=4000000000;
 	g->maxdepth=150;
@@ -676,17 +652,18 @@ int main(void) {
 		"6SKSQH9H2STS8H7S7STH"
 		"AS2H6SQS7H9S2S9HKH4H"
 		"6S4H3S4SJH7STHJS3H6H";
+		/* unknown 2H 8H JH QH KH 3S 5S 5S 9S TS JS QS */
 	fillstack(&t->deck,layout);
 	#else
-	const char *pack=
-	  "AH2H3H4H5H6H7H8H9HTHJHQHKH"
-	  "AH2H3H4H5H6H7H8H9HTHJHQHKH"
-	  "AH2H3H4H5H6H7H8H9HTHJHQHKH"
-	  "AH2H3H4H5H6H7H8H9HTHJHQHKH"
-	  "AS2S3S4S5S6S7S8S9STSJSQSKS"
-	  "AS2S3S4S5S6S7S8S9STSJSQSKS"
-	  "AS2S3S4S5S6S7S8S9STSJSQSKS"
-	  "AS2S3S4S5S6S7S8S9STSJSQSKS";
+        const char *pack=
+		"AH2H3H4H5H6H7H8H9HTHJHQHKH"
+		"AH2H3H4H5H6H7H8H9HTHJHQHKH"
+		"AH2H3H4H5H6H7H8H9HTHJHQHKH"
+		"AH2H3H4H5H6H7H8H9HTHJHQHKH"
+		"AS2S3S4S5S6S7S8S9STSJSQSKS"
+		"AS2S3S4S5S6S7S8S9STSJSQSKS"
+		"AS2S3S4S5S6S7S8S9STSJSQSKS"
+		"AS2S3S4S5S6S7S8S9STSJSQSKS";
 	fillstack(&t->deck,pack);
 	shuffle(&t->deck);
 	#endif
@@ -697,7 +674,7 @@ int main(void) {
 	t->prev=NULL;
 	t->depth=0;
 	t->global=g;
-	t->lastsrc = t->lastdest = t->lastn = -1;
+	t->last.src = t->last.dest = t->last.n = -1;
 
 	/* deal initial tableau */
 	err(NULL,NULL);

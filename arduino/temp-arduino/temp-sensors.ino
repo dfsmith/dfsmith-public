@@ -98,7 +98,7 @@ void setup(void) {
 	Serial.begin(57600);
 	Serial.println("# start SHT temperature and humidity capture");
 	Serial.println("# Commands: N (names)");
-	
+
 	for(i=0;i<PROBES;i++) {
 		p=&probe[i];
 		r=p->init(&probe[i]);
