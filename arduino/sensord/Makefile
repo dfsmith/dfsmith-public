@@ -1,5 +1,5 @@
 LIBDIR=$(HOME)/c/lib
-CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR) -DTEST
+CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR)
 
 sensord: sensord.o
 

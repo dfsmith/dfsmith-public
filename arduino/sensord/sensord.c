@@ -20,9 +20,15 @@
 typedef unsigned int uint;
 
 #ifdef TEST
+#define TRACEp(x) x /* serial port */
+#define TRACEs(x) x /* sockets */
+#define TRACEc(x) x /* calculations */
 #define TRACE(x) x
 #define DBG(x) x
 #else
+#define TRACEp(x)
+#define TRACEs(x)
+#define TRACEc(x)
 #define TRACE(x)
 #define DBG(x)
 #endif
@@ -186,9 +192,9 @@ static void measurementop(measurement *dest,char op,const measurement *arg,doubl
 	}
 }
 
-#define MS_UNITS	1
-#define MS_G		2
-#define MS_NOOFFSET	4
+#define MS_UNITS	1	/* print units */
+#define MS_NOOFFSET	2	/* ignore offset */
+#define MS_G		4	/* generic float format */
 
 static char *double_string(char *buf,size_t buflen,const char *fmt,double val,const char *unit) {
 	if (!fmt) snprintf(buf,buflen,"?%s",unit);
@@ -196,18 +202,18 @@ static char *double_string(char *buf,size_t buflen,const char *fmt,double val,co
 	return buf;
 }
 
-#define VALUE_STRING_FN(TYPE,UNIT,ADD) \
+#define VALUE_STRING_FN(TYPE,UNIT,ADD,GFMT,FMT) \
 	static char *TYPE##_string(const struct probeavg_s *ctx,const measurement *m,uint flags) { \
 		static char buf[24]; \
 		double offset=(flags & MS_NOOFFSET)?0.0:ctx->offset.TYPE + ADD; \
-		const char *fmt=(!m || !m->have##TYPE)?NULL:(flags & MS_G)?"%.3g%s":"%.1f%s"; \
+		const char *fmt=(!m || !m->have##TYPE)?NULL:(flags & MS_G)?GFMT"%s":FMT"%s"; \
 		return double_string(buf,sizeof(buf),fmt,m->TYPE + offset,(flags & MS_UNITS)?UNIT:""); \
 	}
-VALUE_STRING_FN(time,"s",epoch_s)
-VALUE_STRING_FN(temp,"degC",0)
-VALUE_STRING_FN(rh,"%rh",0)
-VALUE_STRING_FN(pressure,"hPa",0)
-VALUE_STRING_FN(state,"state",0)
+VALUE_STRING_FN(time,    "s",    epoch_s,"%.4g","%.1f")
+VALUE_STRING_FN(temp,    "degC", 0,      "%.3g","%.2f")
+VALUE_STRING_FN(rh,      "%rh",  0,      "%.3g","%.1f")
+VALUE_STRING_FN(pressure,"hPa",  0,      "%.4g","%.1f")
+VALUE_STRING_FN(state,   "state",0,      "%.2g","%.1f")
 
 static char *measurement_string(const struct probeavg_s *ctx,const measurement *m,unsigned int flags) {
 	static char line[128];
@@ -281,12 +287,12 @@ static int decodedata(probeport *p) {
 			if (!e) break;
 			l=e;
 		}
-		p->data.m.time=timenow();
+		p->data.m.time=timenow(); /* offset is removed later */
 		p->data.m.havetime=1;
 		DBG(printf("decodedata:out %s\n",measurement_string(&probeavg_zero,&p->data.m,MS_UNITS));)
 		return 1;
 	}
-	TRACE(printf("decodedata: bad line \"%s\" %d/%d\n",p->line,p->current,p->max);)
+	TRACEp(printf("decodedata: bad line \"%s\" %d/%d\n",p->line,p->current,p->max);)
 	return -1; /* malformed line */
 }
 
@@ -301,22 +307,23 @@ static struct probedata_s *readmoredata(probeport *p,const char **error) {
 	do {
 		start=&p->line[p->current];
 		max=p->max - p->current-1;
+		TRACEp(printf("readmoredata: read current=%d max=%d\n",p->current,max);)
 		len=read(p->fd,start,max);
 		if (len==-1) {err="bad read"; break;}
-		if (len==0)  {err="no more data"; break;}
+		if (len==0)  {err="no mode data"; break;}
 		p->current+=len;
-		p->line[p->current]='\0';
-		end=strchr(p->line,'\n');
-		TRACE(printf("readmoredata: got %zd (max %d) bytes on %d: \"%.*s\"\n",
+
+		while((end=memchr(start,'\n',p->current))!=NULL) *end='\0';
+		end=memchr(start,'\0',p->current);
+		TRACEp(printf("readmoredata: got %zd (max %d) bytes on %d: \"%.*s\"\n",
 			len,max,p->fd,(int)((end)?end-start:len),start);)
 		if (!end && p->current+1 >= p->max) {
-			/* implicit '\n' at forced end of line */
+			/* force end of line */
 			end=&p->line[p->current];
 		}
 		if (!end) break; /* incomplete line */
 
-		*end='\0';
-		TRACE(printf("line: \"%s\"\n",p->line);)
+		TRACEp(printf("line: \"%s\"\n",p->line);)
 		switch(decodedata(p)) {
 		case 1:	r=&p->data; break;
 		case 0: break;
@@ -326,10 +333,8 @@ static struct probedata_s *readmoredata(probeport *p,const char **error) {
 
 		/* eat off decoded data */
 		len=&p->line[p->current] - (end);
-		if (len>0) {
-			memmove(p->line,end+1,len-1);
-			p->current=len-1;
-		}
+		if (len>1) memmove(p->line,end+1,len-1);
+		p->current=(len>1)?len-1:0;
 	} while(0);
 	if (error) *error=err;
 	return r;
@@ -368,8 +373,8 @@ static void combineavg(struct probeavg_s *p,struct probedata_s *newdata) {
 		p->sumreset=6000;
 		measurementop(&diff,     '=',&p->offset,0);
 		measurementop(&diff,     '-',&p->avg,0);
-		DBG(printf("re-sum: %s\n",measurement_string(p,&diff,0));)
-		DBG(printf("      : %s\n",measurement_string(p,&p->avg,0));)
+		TRACEc(printf("re-sum: %s\n",measurement_string(p,&diff,0));)
+		TRACEc(printf("      : %s\n",measurement_string(p,&p->avg,0));)
 		measurementop(&p->offset,'=',&p->avg,0);
 		measurementop(&p->sum,   '=',&measurement_zero,0);
 		measurementop(&p->n,     '=',&measurement_zero,0);
@@ -378,14 +383,16 @@ static void combineavg(struct probeavg_s *p,struct probedata_s *newdata) {
 			ADD()
 		}
 		DBG(p->avg=p->sum; measurementop(&p->avg,'/',&p->n,0);)
-		DBG(printf("      : %s\n",measurement_string(p,&p->avg,0));)
+		TRACEc(printf("      : %s\n",measurement_string(p,&p->avg,0));)
 	}
 
 	/* expire old (tailing) values */
 	while(!dll_empty(p->list)) {
 		d=dll_tail(p->list);
-		if (d->m.time + p->offset.time < now+AVGTIME) break;
+		TRACEc(printf("oldest time %f offset %f now %f\n",d->m.time,p->offset.time,now);)
+		if (d->m.time + p->offset.time + AVGTIME > now) break;
 		dll_remove(p->list,d);
+		TRACEc(printf("remove old data from %f\n",d->m.time);)
 		SUB()
 		free(d);
 	}
@@ -499,7 +506,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		crlf=strstr(sl->buf,CRLF CRLF); /* buf is always terminated */
 		if (sl->buflen>=sizeof(sl->buf)-1 || r==0 || crlf) {
 			/* note: this may fail for multiple-request operations */
-			TRACE(printf("GOT: \"%*s\"\n",sl->buflen,sl->buf);)
+			TRACEs(printf("GOT: \"%*s\"\n",sl->buflen,sl->buf);)
 			sl->state=server_processing;
 			break;
 		}
@@ -507,7 +514,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 	case server_writing:
 		if (!writable) {sl->idle+=AVGTIME; break;}
 		send=sl->buflen - sl->count;
-		TRACE(printf("SEND: \"%*s\" (%zd chars)\n",(int)send,sl->buf+sl->count,send);)
+		TRACEs(printf("SEND: \"%*s\" (%zd chars)\n",(int)send,sl->buf+sl->count,send);)
 		w=write(sl->socket,sl->buf+sl->count,send);
 		if (w==-1) sl->state=server_closing;
 		else if (w==0) sl->state=server_closing;
@@ -533,11 +540,11 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		sl->idle=0;
 		/* buf must start with request-line */
 		if (sl->buflen<4 || sscanf(sl->buf,"GET " URISPEC,sl->uri)!=1) {
-			TRACE(printf("FAIL: \"%s\"\n",sl->buf);)
+			TRACEs(printf("FAIL: \"%s\"\n",sl->buf);)
 			sl->state=server_closing;
 			break;
 		}
-		TRACE(printf("PROCESSING: %s\n",sl->uri);)
+		TRACEs(printf("PROCESSING: %s\n",sl->uri);)
 		if (strcmp(sl->uri,"/")==0) {
 			OUT("%s# temperature server" CRLF,header_ok);
 			OUTADD("# /localtime        -> YYYY-MM-DD HH:MM:SS time_t tz_offset" CRLF);
@@ -622,12 +629,12 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		OUT_NOK();
 		break;
 	case server_reseting:
-		TRACE(printf("RESET\n");)
+		TRACEs(printf("RESET\n");)
 		server_reset(sl);
 		break;
 	case server_closing:
 		/* will eventually get all of them */
-		TRACE(printf("CLOSING\n");)
+		TRACEs(printf("CLOSING\n");)
 		break;
 	}
 	if (sl->idle >= 300) sl->state=server_closing;
@@ -706,7 +713,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 		}
 		/* process select()'s probelist */
 		if (FD_ISSET(pp->fd,&readfds)) {
-			TRACE(printf("select on %d good for reading\n",pp->fd);)
+			TRACEp(printf("select on %d good for reading\n",pp->fd);)
 			processdata(&probestate,readmoredata(pp,&e));
 			if (e) break;
 		}
