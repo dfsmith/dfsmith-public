@@ -12,6 +12,7 @@ typedef struct {
         json_valuecontext root; /* must be first in structure; see getsuperlement() */
         json_callbacks callbacks;
         int errcount;
+        json_in string;
 } superelement;
 
 typedef json_valuecontext ctx;
@@ -45,7 +46,7 @@ static superelement *getsuperelement(const ctx *c) {
 static json_in not_thing(ctx *c,const char *thing,json_in s,json_in p,const char *msg) {
         /* report invalid type of thing */
         superelement *super=getsuperelement(c);
-        if (!super) {printf("remove me %s:%s\n",thing,msg); return NULL;}
+        if (!super) return NULL;
         const json_callbacks *cb=&super->callbacks;
         super->errcount++;
         if (super->errcount <= 1)
@@ -70,12 +71,13 @@ static void default_error(const json_valuecontext *c,const char *dtype,json_in s
         if (!super) {printf("%s\n",GETTEXT("error reporting failed")); return;}
         json_in q;
         /* highlight error */
-        for(q=super->root.value.object;*q;q++)
+        for(q=super->string;*q;q++) {
                 printf("%s%s%c%s",
                         (q==s)?"!!!":"" /* highlight element */,
                         (q==p)?"<<<":"" /* highlight character in element */,
                         *q,
                         (q==p)?">>>":"");
+        }
         printf("\n");
 }
 
@@ -425,11 +427,13 @@ static json_in got_value(ctx *c,json_in s) {
 
 const char *json_parse(const json_callbacks *ucb,const char *s) {
         superelement super={};
+        if (!s) return NULL;
         if (ucb) super.callbacks=*ucb;
         if (!super.callbacks.got_value) super.callbacks.got_value=default_got_value;
         if (!super.callbacks.error)     super.callbacks.error=default_error;
         super.root.name.s="";
         super.root.name.n=0;
+        super.string=s;
 
         json_in p;
         const char *err=NULL;
@@ -580,7 +584,7 @@ int main(void) {
         return json_parse(&cb,json)!=NULL;
 }
 
-#elif 1
+#elif 0
 
 static void showutf(const char *src,size_t lenmod) {
         char utf8[24];
@@ -618,7 +622,7 @@ int main(void) {
         return 0;
 }
 
-#elif 1
+#elif 0
 
 /* test cases */
 
@@ -660,6 +664,7 @@ int main(void) {
                 /* error examples */
                 {false,"{hello:3}"},
                 {false,"[1,2,3,]"},
+                {false,"what what?"},
         };
         int slen=sizeof(t)/sizeof(*t);
         int i;
@@ -691,6 +696,19 @@ int main(void) {
         printf(GETTEXT("Structure parse test: good=%d bad=%d\n"),goodc,badc);
         printf("*** %s ***\n",(badc==0)?GETTEXT("PASS"):GETTEXT("FAIL"));
         return (badc==0)?0:1;
+}
+
+#elif 1
+
+/* command line */
+
+int main(int argc,char *argv[]) {
+        argc--;
+        argv++;
+        while(argc-->0) {
+                json_parse(NULL,*(argv++));
+        }
+        return 0;
 }
 
 #endif
