@@ -17,6 +17,7 @@
 #ifndef STACK_JSON_H
 #define STACK_JSON_H
 
+#include <stdlib.h>
 #include <stdbool.h>
 
 /* Somewhere inside the JSON string in memory. */
@@ -87,6 +88,9 @@ typedef struct {
 } json_callbacks;
 
 /* -- utility functions -- */
+
+/* Convert a json_value string to UTF-8.  Returns required length of dest or -1 on error. */
+extern ssize_t json_string_to_utf8(char *dest,size_t destlen,const json_nchar *in);
 
 /* Print the chain of path variables to the context. Returns the final valuecontext. */
 extern const json_valuecontext *json_printpath(const json_valuecontext *c);

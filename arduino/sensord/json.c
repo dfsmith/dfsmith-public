@@ -3,8 +3,6 @@
 /* Stack-based JSON parser following http://www.json.org charts. */
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
@@ -31,7 +29,7 @@ static json_in startswith(const char *match,json_in p) {
 }
 
 static bool match_nchar(const char *match,const json_nchar *s) {
-        size_t n=strlen(match);
+        int n=strlen(match);
         if (s->s==NULL && s->n==0 && match==NULL) return true;
         if (!s->s || !match) return false;
         if (s->n!=n) return false;
@@ -58,6 +56,7 @@ static json_in not_thing(ctx *c,const char *thing,json_in s,json_in p,const char
 /* -- default callbacks -- */
 
 static void default_got_value(const json_valuecontext *base,const json_value *v,void *context) {
+        (void)context;
         json_printpath(base);
         printf(" = ");
         json_printvalue(v);
@@ -65,6 +64,7 @@ static void default_got_value(const json_valuecontext *base,const json_value *v,
 }
 
 static void default_error(const json_valuecontext *c,const char *dtype,json_in s,json_in p,const char *msg,void *context) {
+        (void)context;
         printf("%s %s (%s):\n",GETTEXT("bad"),dtype,msg);
         superelement *super=getsuperelement(c);
         if (!super) {printf("%s\n",GETTEXT("error reporting failed")); return;}
@@ -96,9 +96,13 @@ static json_in eat_whitespace(json_in p) {
         return p;
 }
 
-static json_in eat_hex(json_in p,int max) {
+static json_in eat_hex(json_in p,int max,unsigned int *value) {
+        /* somewhat dependent on ASCII */
         json_in s;
+        int d;
+        *value=0;
         for(s=p;*s;s++) {
+                d=-1;
                 if (max>0 && s-p>=max) break;
                 switch(*s) {
                 case '0':
@@ -111,52 +115,136 @@ static json_in eat_hex(json_in p,int max) {
                 case '7':
                 case '8':
                 case '9':
-                case 'A': case 'a':
-                case 'B': case 'b':
-                case 'C': case 'c':
-                case 'D': case 'd':
-                case 'E': case 'e':
-                case 'F': case 'f':
-                        continue;
+                        d = *s - '0';
+                        break;
+                case 'A':
+                case 'B':
+                case 'C':
+                case 'D':
+                case 'E':
+                case 'F':
+                        d = 10 + *s - 'A';
+                        break;
+                case 'a':
+                case 'b':
+                case 'c':
+                case 'd':
+                case 'e':
+                case 'f':
+                        d = 10 + *s - 'a';
+                        break;
                 default:
-                        return s;
+                        break;
                 }
+                if (d<0) break;
+                *value = 0x10 * (*value) + d;
         }
+        if (max>0 && s-p!=max) return NULL;
         return s;
 }
 
-static json_in eat_string(ctx *c,json_in s,json_nchar *str) {
+typedef struct {
+        char *s;
+        int max;
+        int required;
+} utf8_nchar;
+
+static bool append(utf8_nchar *dest,unsigned char x) {
+        if (dest->required < dest->max) {
+                dest->s[dest->required]=x;
+        }
+        dest->required++;
+        return (dest->required <= dest->max)?true:false;
+}
+
+static bool accumulate(utf8_nchar *dest,unsigned int codepoint) {
+        int undo;
+
+        if (!dest) return false;
+        if (codepoint < (1<<7)) {
+                /* fast path */
+                append(dest,codepoint);
+                return true;
+        }
+        if (codepoint >= (1<<21)) return false;
+
+        undo=dest->required;
+
+        /* the "goto" version of this code is easier to understand... */
+        /* 8-21 bits */
+        if (codepoint < (1<<11)) {
+                /* 8-11 bits */
+                append(dest,0xC0 | ((codepoint>>6) & 0x1F));
+        }
+        else {
+                /* 12-21 bits */
+                if (codepoint < (1<<16)) {
+                        /* 12-16 bits */
+                        append(dest,0xE0 | ((codepoint>>12) & 0x0F));
+                }
+                else {
+                        /* 17-21 bits */
+                        append(dest,0xF0 | ((codepoint>>18) & 0x07));
+                        append(dest,0x80 | ((codepoint>>12) & 0x3F));
+                }
+                append(dest,0x80 | ((codepoint>>6) & 0x3F));
+        }
+        if (!append(dest,0x80 | ((codepoint>>0) & 0x3F))) {
+                /* undo and pad out with '\0' */
+                for(;undo < dest->max;undo++) dest->s[undo]='\0';
+                return false;
+        }
+        return true;
+}
+
+static json_in eat_char(json_in s,int max,utf8_nchar *build) {
+        json_in q;
+        unsigned int hexval;
+
+        if (max<1) return NULL;
+        if (*s!='\\') {
+                accumulate(build,*s);
+                return s+1;
+        }
+        /* control characters */
+        if (max<=2) return NULL;
+        s++;
+        q=s+1;
+        switch(*s) {
+        case '\\': /* fall through */
+        case '/': accumulate(build,*s); break;
+
+        case 'b': accumulate(build,'\b'); break;
+        case 'f': accumulate(build,'\f'); break;
+        case 'n': accumulate(build,'\n'); break;
+        case 'r': accumulate(build,'\r'); break;
+        case 't': accumulate(build,'\t'); break;
+
+        case 'u':
+                if (max<6) return NULL;
+                q=eat_hex(q,4,&hexval);
+                if (!q) break;
+                accumulate(build,hexval);
+                break;
+        case '\0':
+        default:
+                q=NULL;
+                break;
+        }
+        return q;
+}
+
+static json_in eat_string(ctx *c,json_in s,json_nchar *str,utf8_nchar *build) {
         json_in p,q;
         const char *err=NULL;
-        if (*s!='\"') return NULL;
-        c->value.type=json_type_string;
-        str->s=s+1;
-        for(p=str->s;*p && !err;p++) {
-                if (*p=='\"') {str->n = p - str->s; return p+1;}
-                if (*p!='\\') continue;
 
-                /* control characters */
-                p++;
-                switch(*p) {
-                case '\\':
-                case '/':
-                case 'b':
-                case 'f':
-                case 'n':
-                case 'r':
-                case 't':
-                        p++;
-                        break;
-                case 'u':
-                        q=eat_hex(p,4);
-                        if (q-p!=4) {err=GETTEXT("bad unicode sequence"); break;}
-                        p=q;
-                        break;
-                case '\0':
-                default:
-                        err=GETTEXT("bad control character");
-                        break;
-                }
+        if (*s!='\"') return NULL;
+        if (c) c->value.type=json_type_string;
+        str->s = s+1;
+        for(p=str->s;*p;p=q) {
+                if (*p=='\"') {str->n = p - str->s; return p+1;}
+                q=eat_char(p,16,build);
+                if (!q) {err=GETTEXT("invalid control sequence"); break;}
         }
         if (!err) err=GETTEXT("no closing quote");
         return not_thing(c,GETTEXT("string"),s,p,err);
@@ -247,7 +335,7 @@ static json_in get_value(ctx *c,json_in s) {
                 return p;
         }
 
-        q=eat_string(c,p,&c->value.string);
+        q=eat_string(c,p,&c->value.string,NULL);
         if (q) return eat_whitespace(q);
 
         q=eat_number(c,p);
@@ -302,7 +390,7 @@ static json_in eat_object(ctx *vc,json_in s) {
         if (vc) vc->next=&c;
         for(;;) {
                 if (!*p) {err=GETTEXT("closure missing"); break;}
-                q=eat_string(&c,p,&c.name);
+                q=eat_string(&c,p,&c.name,NULL);
                 if (!q) {err=GETTEXT("bad name"); break;}
                 p=eat_whitespace(q);
                 if (*p!=':') {err=GETTEXT("colon missing"); break;}
@@ -435,11 +523,29 @@ bool json_matches_path(const json_valuecontext *c,...) {
         return result;
 }
 
+ssize_t json_string_to_utf8(char *dest,size_t destlen,const json_nchar *in) {
+        utf8_nchar result;
+        json_in p,q,top;
+
+        result.s=dest;
+        result.required=0;
+        result.max=destlen;
+        top = in->s + in->n;
+        for(p = in->s;p;p=q) {
+                if (!*p) break;
+                q=eat_char(p,top-p,&result);
+        }
+        if (!p) return -1;
+        append(&result,'\0');
+        return result.required;
+}
+
 /* -- tests and examples -- */
 
 #if 0
 
 /* Minimal example */
+
 #include "json.h"
 int main(void) {
         json_parse(NULL,"{\"hello\":\"world\"}");
@@ -449,7 +555,7 @@ int main(void) {
 #elif 0
 
 /* Pick off the value ["johnny"][5] */
-#include "json.h"
+
 static void condition(const json_valuecontext *root,const json_value *v,void *context) {
         if (json_matches_path(root,"johnny","#5",NULL)) {
                 json_printpath(root);
@@ -474,9 +580,48 @@ int main(void) {
         return json_parse(&cb,json)!=NULL;
 }
 
-#elif 0
+#elif 1
+
+static void showutf(const char *src,size_t lenmod) {
+        char utf8[24];
+        ssize_t s,usize=sizeof(utf8);
+        json_nchar test;
+
+        memset(utf8,0,sizeof(utf8));
+        test.s=src;
+        test.n=strlen(test.s) + lenmod;
+        s=json_string_to_utf8(utf8,sizeof(utf8),&test);
+        printf("%d:\"%.*s\" -> %zd:\"%.*s\"\n",
+                test.n,test.n,test.s,
+                s,(int)sizeof(utf8),utf8);
+        if (s > usize) {
+                char bigger[s];
+                memset(bigger,0,s);
+                ssize_t after=json_string_to_utf8(bigger,s,&test);
+                printf("retry...\n");
+                printf("%d:\"%.*s\" -> %zd:\"%.*s\"\n",
+                        test.n,test.n,test.s,
+                        after,(int)s,bigger);
+
+        }
+}
+
+/* test UTF-8 handling */
+int main(void) {
+        showutf("hello gar\\u00e7on",0);
+        showutf("hello you\\b\\b\\bme!",0);
+        showutf("into the \\u1d01ther",0);
+        showutf("snowman \\u2603 star \\u2606",0);
+        showutf("snowman \\u2603 star \\u2606",-2);
+        showutf("invalid \\u23zz unicode",0);
+        showutf("snowman line \\u2603\\u2603\\u2603\\u2603\\u2603\\u2603 ends",0);
+        return 0;
+}
+
+#elif 1
 
 /* test cases */
+
 int main(void) {
         struct {
                 bool good;
@@ -547,4 +692,5 @@ int main(void) {
         printf("*** %s ***\n",(badc==0)?GETTEXT("PASS"):GETTEXT("FAIL"));
         return (badc==0)?0:1;
 }
+
 #endif

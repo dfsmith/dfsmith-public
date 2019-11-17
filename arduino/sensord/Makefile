@@ -1,7 +1,7 @@
 LIBDIR=$(HOME)/c/lib
 CFLAGS=-Wall -Wextra -O2 -I$(LIBDIR)
 
-sensord: sensord.o
+sensord: sensord.o json.o
 
 clean:
 	rm -f *.o sensord
