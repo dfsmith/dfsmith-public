@@ -1,3 +1,4 @@
 sensord
 *.o
 htdocs
+stack-json

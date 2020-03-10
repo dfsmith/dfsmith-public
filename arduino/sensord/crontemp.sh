@@ -3,13 +3,24 @@
 cd "/home/dfsmith/public_html/sensors"
 export PATH="$PATH:/home/dfsmith/bin"
 
+startdaemon() {
+	if [ -x /home/dfsmith/bin/sensord -a -r /dev/ttyarduino ]; then
+		stty 57600 </dev/ttyarduino
+		/home/dfsmith/bin/sensord &
+	fi
+}
+
+stopdaemon() {
+	killall sensord
+}
+
 getsensorlines() {
 	# returns sensor data in the form
-	# seconds: time
+	# seconds: time1 time1...
 	# degC: temp1 temp2...
 	# %rh: rh1 rh2...
 	# hPa: pressure1 pressure2...
-	curl -s http://localhost:8888/measurementlines
+	curl -s http://localhost:8888/measurementlines || startdaemon
 }
 
 addah() {
@@ -75,6 +86,8 @@ plotlongterm() {
 	col1='lt rgbcolor "cyan"'
 	col2='lt rgbcolor "magenta"'
 	col3='lt rgbcolor "yellow"'
+	col4='lt rgbcolor "red"'
+	col5='lt rgbcolor "green"'
 	
 	nice gnuplot <<EOF 1>&2
 set xdata time
@@ -95,16 +108,20 @@ set terminal png truecolor enhanced font "palatino,12" size 800,600
 set output "daily-temp.png"
 set title "Temperature range over day"
 set ylabel "temperature /{/Symbol \260}F"
-plot  "minmax-degC.log" using $(boxxy 'ctof($3)' 'ctof($4)') $col1 title "Garage box",\
-      ""                using $(boxxy 'ctof($5)' 'ctof($6)') $col2 title "Garage outside",\
-      ""                using $(boxxy 'ctof($7)' 'ctof($8)') $col3 title "Garage interior"
+plot  "minmax-degC.log" using $(boxxy 'ctof($3)'  'ctof($4)' ) $col1 title "Garage box",\
+      ""                using $(boxxy 'ctof($5)'  'ctof($6)' ) $col2 title "Garage outside",\
+      ""                using $(boxxy 'ctof($7)'  'ctof($8)' ) $col3 title "Garage interior",\
+      ""                using $(boxxy 'ctof($9)'  'ctof($10)') $col4 title "Kitchen",\
+      ""                using $(boxxy 'ctof($11)' 'ctof($12)') $col5 title "Upstairs"
 set output
 
 set output "daily-rh.png"
 set title "Relative humidity range over day"
 set ylabel "relative humidity /%"
-plot  "minmax-%rh.log"   using $(boxxy '$3' '$4') $col1 title "Garage box",\
-      ""                 using $(boxxy '$5' '$6') $col2 title "Garage outside"
+plot  "minmax-%rh.log"   using $(boxxy '$3'  '$4' ) $col1 title "Garage box",\
+      ""                 using $(boxxy '$5'  '$6' ) $col2 title "Garage outside",\
+      ""                 using $(boxxy '$9'  '$10') $col3 title "Kitchen",\
+      ""                 using $(boxxy '$11' '$12') $col4 title "Upstairs"
 set output
 
 set output "daily-ah.png"
@@ -122,20 +139,47 @@ set output
 EOF
 }
 
+probeopt() {
+	name=( "garage box" "garage outside" "garage inside" "garage door" "kitchen" "upstairs" )
+	  lt=(  1            2                3               4             5         6         )
+	 col=(  \$2          \$3              \$4             \$5           \$6       \$7       )
+	probe="$1"
+	trans="$2"
+	width="${3:-2}"
+	if [ "$trans" != "" ]; then
+		col="$trans(${col[$probe]})"
+	else
+		col="${col[$probe]}"
+	fi
+	
+	echo "using (lt(\$1)):($col) lt ${lt[$probe]} lw ${width} title \"${name[$probe]}\""
+}
+
 plotdate() {
 	date="$1"
 	linkto="$2"
 	lazyfile="${date}-$3.log"
-	plotfile="${date}.png"
+	ext="png"
+	terminal="png truecolor enhanced font \"palatino,12\" size 800,600 #"
+	degree="\260"
+	#ext="js"
+	#terminal="canvas rounded size 800,600 enhanced fsize 10 lw 1.6 fontscale 1 jsdir \".\" name"
+	#degree="&deg;"
+
+	tempfile="${date}-degf.${ext}"
+	pressurefile="${date}-hpa.${ext}"
+	rhfile="${date}-rh.${ext}"
+	ahfile="${date}-ah.${ext}"
+	statefile="${date}-state.${ext}"
 
 	if [ ! -f "${date}-degC.log" ]; then
 		return
 	fi
 
-	if [ -f "$lazyfile" -a -f "$plotfile" ]; then
+	if [ -f "$lazyfile" -a -f "$tempfile" ]; then
 		lazyage=`stat -c %Z "${lazyfile}"`
-		plotage=`stat -c %Z "${plotfile}"`
-		if [ $(( $lazyage - $plotage )) -lt 300 ]; then
+		tempage=`stat -c %Z "${tempfile}"`
+		if [ $(( $lazyage - $tempage )) -lt 300 ]; then
 			# less than 5 minutes old: skip plotting
 			return
 		fi
@@ -144,6 +188,8 @@ plotdate() {
 	tz=`gettz`
 	mintime=$(( `getstarttime "${date}-degC.log"` + $tz ))
 	maxtime=$(( $mintime + 24*60*60 ))
+	
+	
 	
 	nice gnuplot <<EOF 1>&2
 set timefmt "%s"
@@ -171,25 +217,65 @@ c6 = 1.80122502
 set style data line
 set grid x
 set grid y
-set yrange [20:110]
 set xrange ["$mintime":"$maxtime"]
 
-set terminal png small size 800,600
-set output "$plotfile.tmp"
-plot "${date}-degC.log" using (lt(\$1)):(ctof(\$2)) lt 1 lw 6      title     "temperature /degF (probe0)",\
-     "${date}-%rh.log"  using (lt(\$1)):(\$2)       lt 1 lw 2      title      "rel. humidity /% (probe0)",\
-     "${date}-ah.log"   using (lt(\$1)):(10*\$2)    lt 1 with line title "abs. humidity /g/10m3 (probe0)",\
-     "${date}-degC.log" using (lt(\$1)):(ctof(\$3)) lt 2 lw 6      title     "temperature /degF (probe1)",\
-     "${date}-%rh.log"  using (lt(\$1)):(\$3)       lt 2 lw 2      title      "rel. humidity /% (probe1)",\
-     "${date}-ah.log"   using (lt(\$1)):(10*\$3)    lt 2 with line title "abs. humidity /g/10m3 (probe1)",\
-     "${date}-degC.log" using (lt(\$1)):(ctof(\$4)) lt 3 lw 6      title     "temperature /degF (probe2)",\
-     "${date}-hPa.log"  using (lt(\$1)):(\$4-950)   lt 3 lw 2      title  "pressure-950hPa /hPa (probe2)"
+set terminal ${terminal} "chart_${date//\//_}_temp"
+set output "$tempfile.tmp"
+set ylabel "temperature /${degree}F"
+set yrange [20:110]
+plot "${date}-degC.log" \
+	   $(probeopt 0 ctof 6),\
+	"" $(probeopt 1 ctof 6),\
+	"" $(probeopt 2 ctof 6),\
+	"" $(probeopt 4 ctof 6),\
+	"" $(probeopt 5 ctof 6)
 set output
+
+set terminal ${terminal} "chart_${date//\//_}_hpa"
+set output "$pressurefile.tmp"
+set ylabel "pressure /hPa"
+set yrange [950:1025]
+plot 1000 with line lt 1 lw 1 dt 3 notitle,"${date}-hPa.log" \
+	   $(probeopt 2)
+set output
+
+set terminal ${terminal} "chart_${date//\//_}_rh"
+set output "$rhfile.tmp"
+set ylabel "relative humidity /%"
+set yrange [0:100]
+plot "${date}-%rh.log" \
+	   $(probeopt 0),\
+	"" $(probeopt 1),\
+	"" $(probeopt 4),\
+	"" $(probeopt 5)
+set output
+
+set terminal ${terminal} "chart_${date//\//_}_ah"
+set output "$ahfile.tmp"
+set ylabel "absolute humidity /g/m^3"
+set yrange [0:20]
+plot "${date}-ah.log" \
+	   $(probeopt 0),\
+	"" $(probeopt 1),\
+	"" $(probeopt 4),\
+	"" $(probeopt 5)
+set output
+
+set terminal ${terminal} "chart_${date//\//_}_state"
+set output "$statefile.tmp"
+set ylabel "state"
+set yrange [0:1]
+plot "${date}-state.log" \
+	   $(probeopt 3)
+set output
+
 EOF
-	mv "$plotfile.tmp" "$plotfile"
-	if [ "$linkto" != "" ]; then
-		ln -sf "$plotfile" "$linkto"
-	fi
+	for f in $tempfile $pressurefile $rhfile $ahfile $statefile; do
+		mv "${f}.tmp" "$f"
+		if [ "$linkto" != "" ]; then
+			ln -sf "$f" "${linkto}${f#${date}}"
+		fi
+	done
 }
 
 makeahfile() {
@@ -209,21 +295,37 @@ makeahfile() {
 # replot charts?
 if [ "$1" != "" ]; then
 	case "$1" in
+	-?|--help|-h)
+		echo "$0 [ longterm | YYYY/MM/DD ]"
+		;;
 	longterm)
 		plotlongterm
 		;;
-	*)
+	????/??/??)
 		plotdate "$1"
+		;;
+	*)
+		echo "$0: unknown argument \"$1\""
 		;;
 	esac
 	exit
 fi
 
 # cron script: get new sensor data
+currentseconds=`date +%s`
 getsensorlines | addah | ( 
-	read sunit seconds
-	if [ "$sunit" != "seconds:" ]; then exit; fi
-	LOGFILEPRE=`makelogfiledir ${seconds%.*}`
+	read unitcolon seconds rest
+	if [ "$unitcolon" != "seconds:" ]; then exit; fi
+	iseconds="${seconds%.*}" # effectively (int)floor(seconds)
+	if [ "$iseconds" = "" ]; then exit; fi
+	
+	# check status
+	dsec=$(( $currentseconds - $iseconds ))
+	if [ $dsec -gt 180 ]; then stopdaemon; exit; fi
+	if [ $dsec -gt 120 ]; then exit; fi
+	if [ $dsec -lt 0 ]; then exit; fi
+	
+	LOGFILEPRE=`makelogfiledir ${iseconds}`
 	if [ "$LOGFILEPRE" = "" ]; then exit; fi
 	declare -A replot
 	declare -a degc
@@ -251,11 +353,11 @@ getsensorlines | addah | (
 
 	# build complete charts for finalized day(s)
 	for date in ${!replot[@]}; do
-		plotdate "$date" yesterday.png
+		plotdate "$date" yesterday
 	done
 
 	# keep current charts up to the minute
-	plotdate "$LOGFILEPRE" today.png degC
+	plotdate "$LOGFILEPRE" today degC
 
 	# build daily minmax charts
 	if [ ${#replot[@]} -gt 0 ]; then

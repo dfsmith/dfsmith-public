@@ -1,5 +1,6 @@
 /* > sensord.c */
 /* Daniel F. Smith, 2014, 2018 */
+#define _DEFAULT_SOURCE 1 /* for tm_gmtoff */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -17,6 +18,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+/* see https://github.com/dfsmith/stack-json */
+#include "stack-json/src/json.h"
+
 typedef unsigned int uint;
 
 #ifdef TEST
@@ -33,14 +37,32 @@ typedef unsigned int uint;
 #define DBG(x)
 #endif
 
+#define JSONSOURCE "mosquitto_sub -t auto/sensor"
+
 #define SENSORTTY "/dev/ttyarduino"
 //#define SENSORTTY "testdata"
+
 #define AVGTIME 60
 #define MAXPROBES 10
 #define PORT 8888
 
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define lengthof(x) (sizeof(x)/sizeof(*(x)))
+
+typedef struct {
+	const char *id;
+	const char *location;
+} probeinfo;
+
+probeinfo probelookup[]={
+	{"arduino-0","garage box"},
+	{"arduino-1","garage outside"},
+	{"arduino-2","garage inside"},
+	{"arduino-3","garage door"},
+	{"net:30:AE:A4:38:33:A8","kitchen"},
+	{"net:A4:CF:12:24:97:84","master bedroom"},
+};
+static const int probelookups=lengthof(probelookup);
 
 /* HTTP headers */
 #define CRLF "\r\n"
@@ -119,7 +141,8 @@ typedef struct {
 	uint havepressure:1;
 	uint havestate:1;
 } measurement;
-const measurement measurement_null={0,0.0,0.0,0.0,0.0, 0,0,0,0,0};
+#define MEASUREMENT_NULL {0,0.0,0.0,0.0,0.0, 0,0,0,0,0}
+const measurement measurement_null=MEASUREMENT_NULL;
 /* zero is used for clearing stats */
 #define MEASUREMENT_ZERO {0,0.0,0.0,0.0,0.0, 1,1,1,1,1}
 const measurement measurement_zero=MEASUREMENT_ZERO;
@@ -165,29 +188,57 @@ typedef struct {
 	uint complete:1;
 } probeport;
 
+static int probefromid(const char *id) {
+	int p;
+	for(p=0;p<probelookups;p++) {
+		if (strcmp(probelookup[p].id,id)==0)
+			return p;
+	}
+	return -1;
+}
+
 static void measurementop(measurement *dest,char op,const measurement *arg,double x) {
-	#define DIVOP(READING,OP) do{if (arg->have##READING && arg->READING!=0.0) {dest->READING /= arg->READING;} else {dest->have##READING=0;}}while(0)
-	#define UNIOP(READING,OP) do{if (arg->have##READING) {dest->READING OP;}}while(0)
-	#define REGOP(READING,OP) do{if (arg->have##READING) {dest->READING OP arg->READING;}}while(0)
-	#define MULOP(READING,OP) do{if (arg->have##READING) {dest->READING OP x * arg->READING;}}while(0)
-	#define ADDOP(READING,OP) do{if (arg->have##READING) {dest->READING OP x + arg->READING;}}while(0)
-	#define SQUOP(READING,OP) do{if (arg->have##READING) {dest->READING OP arg->READING * arg->READING;}}while(0)
-	#define TIMOP(READING,OP) do{if (arg->have##READING) {dest->READING OP arg->READING * arg->time;}}while(0)
-	#define DOOPS(DOOP,OP) do{DOOP(time,OP); DOOP(temp,OP); DOOP(rh,OP); DOOP(pressure,OP); DOOP(state,OP);}while(0)
+	#define SRC  1
+	#define DEST 2
+	#define BOTH 3
+	#define CHK(READING,NEED,STM,COND) do {				\
+		bool updated=false;					\
+		do{							\
+			if ((NEED & 1) && !arg->have##READING) break;	\
+			if ((NEED & 2) && !dest->have##READING) break;	\
+			if (!(COND)) break;				\
+			STM;						\
+			updated=true;					\
+		} while(0);						\
+		dest->have##READING=updated;				\
+		} while(0)
+
+	#define DIVOP(READING,OP,NEED) CHK(READING,NEED,dest->READING/=arg->READING,arg->READING!=0.0)
+	#define UNIOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP,true)
+	#define REGOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP arg->READING,true)
+	#define MULOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP x * arg->READING,true)
+	#define ADDOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP x + arg->READING,true)
+	#define SQUOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP arg->READING * arg->READING,true)
+	#define TIMOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP arg->READING * arg->time,true)
+	#define DOOPS(DOOP,OP,NEED) do{				\
+		DOOP(time,OP,NEED); DOOP(temp,OP,NEED);		\
+		DOOP(rh,OP,NEED);   DOOP(pressure,OP,NEED);	\
+		DOOP(state,OP,NEED);				\
+		}while(0)
 	switch(op) {
-	case '=': *dest=*arg;      break;
-	case '+': DOOPS(REGOP,+=); break;
-	case '-': DOOPS(REGOP,-=); break;
-	case '*': DOOPS(REGOP,*=); break;
-	case '/': DOOPS(DIVOP,/=); break;
-	case 'a': DOOPS(ADDOP,= ); break;
-	case 'm': DOOPS(MULOP,= ); break;
-	case 's': DOOPS(SQUOP,+=); break;
-	case 'S': DOOPS(SQUOP,-=); break;
-	case 't': DOOPS(TIMOP,+=); break;
-	case 'T': DOOPS(TIMOP,-=); break;
-	case 'i': DOOPS(UNIOP,++); break; /* increment if present */
-	case 'd': DOOPS(UNIOP,--); break; /* increment if present */
+	case '=': *dest=*arg;           break;
+	case '+': DOOPS(REGOP,+=,BOTH); break;
+	case '-': DOOPS(REGOP,-=,BOTH); break;
+	case '*': DOOPS(REGOP,*=,BOTH); break;
+	case '/': DOOPS(DIVOP,/=,BOTH); break;
+	case 'a': DOOPS(ADDOP,= ,SRC);  break;
+	case 'm': DOOPS(MULOP,= ,SRC);  break;
+	case 's': DOOPS(SQUOP,+=,BOTH); break;
+	case 'S': DOOPS(SQUOP,-=,BOTH); break;
+	case 't': DOOPS(TIMOP,+=,BOTH); break;
+	case 'T': DOOPS(TIMOP,-=,BOTH); break;
+	case 'i': DOOPS(UNIOP,++,DEST); break; /* increment if present */
+	case 'd': DOOPS(UNIOP,--,DEST); break; /* increment if present */
 	default: break;
 	}
 }
@@ -296,7 +347,7 @@ static int decodedata(probeport *p) {
 	return -1; /* malformed line */
 }
 
-static struct probedata_s *readmoredata(probeport *p,const char **error) {
+static struct probedata_s *readserialdata(probeport *p,const char **error) {
 	/* read at least 1 char from probe stream */
 	char *end,*start;
 	ssize_t len;
@@ -309,8 +360,8 @@ static struct probedata_s *readmoredata(probeport *p,const char **error) {
 		max=p->max - p->current-1;
 		TRACEp(printf("readmoredata: read current=%d max=%d\n",p->current,max);)
 		len=read(p->fd,start,max);
-		if (len==-1) {err="bad read"; break;}
-		if (len==0)  {err="no mode data"; break;}
+		if (len==-1) {err="bad serial read"; break;}
+		if (len==0)  {err="no more serial data"; break;}
 		p->current+=len;
 
 		while((end=memchr(start,'\n',p->current))!=NULL) *end='\0';
@@ -340,7 +391,93 @@ static struct probedata_s *readmoredata(probeport *p,const char **error) {
 	return r;
 }
 
-static void combineavg(struct probeavg_s *p,struct probedata_s *newdata) {
+static void storejson(const json_valuecontext *root,const json_value *v,void *context) {
+	struct probedata_s *p=context;
+	
+	switch(v->type) {
+	case json_type_string:
+		if (json_matches_path(root,"id",NULL)) {
+			char buf[32];
+			if (json_string_to_utf8(buf,sizeof(buf),&v->string) >= sizeof(buf))
+				return; /* too long */
+			p->probe=probefromid(buf);
+			return;
+		}
+		break;
+	case json_type_number:
+		if (json_matches_path(root,"probe",NULL)) {
+			p->probe=v->number;
+			return;
+		}
+		#define MATCH(KEY,STORE) \
+			if (json_matches_path(root,KEY,NULL)) { \
+				p->m.STORE=v->number; \
+				p->m.have##STORE=1; \
+				return; \
+			}
+		MATCH("s",time);
+		MATCH("degc",temp);
+		MATCH("rh",rh);
+		MATCH("hpa",pressure);
+		MATCH("state",state);
+		break;
+	default:
+		break;
+	}
+	/* ignore no match */
+	return;
+}
+
+static void ignorejsonerr(const json_valuecontext *c,const char *e,json_in s,json_in h,const char *m,void *context) {
+	struct probedata_s *p=context;
+	(void)c; (void)e; (void)s; (void)h; (void)m; (void)context;
+	memset(p,0,sizeof(*p));
+	return;
+}
+
+static struct probedata_s *readjsondata(int jsonfd,bool *more,const char **error) {
+	static struct probedata_s r;
+	static char buf[256];
+	static ssize_t buflen;
+	const char *err=NULL;
+	const char *end;
+	static json_callbacks cb={.got_value=storejson,.error=ignorejsonerr};
+	
+	do {
+		/* each read should form one or more complete JSON data blocks */
+		if (buflen==0) {
+			buflen=read(jsonfd,buf,sizeof(buf)-1);
+			if (buflen==0) {err="no more JSON data"; break;}
+			if (buflen==-1) {err="bad JSON read"; break;}
+			buf[buflen]='\0';
+		}
+		
+		memset(&r,0,sizeof(r));
+		cb.context=&r;
+		end=json_parse(&cb,buf);
+		if (end) {
+			size_t removed=end-buf;
+			memmove(buf,end,buflen-removed);
+			buflen-=removed;
+			if (!r.m.havetime) {
+				r.m.time=timenow();
+				r.m.havetime=1;
+			}
+			*more=(buflen==0)?false:true;
+			return &r;
+		}
+		else {
+			err="bad JSON data";
+			buflen=0;
+			break;
+		}
+	} while(0);
+	if (error) *error=err;
+	*more=false;
+	return NULL;
+}
+
+static void combineavg(struct probeavg_s *p,const struct probedata_s *newdata) {
 	struct probedata_s *d;
 	double now;
 
@@ -456,7 +593,7 @@ struct server_s {
 	bool noreset;
 	#define URISPEC "%199s" /* stringify sizeof uri */
 	char uri[200];
-	char buf[3800];
+	char buf[2048+MAXPROBES*128];
 };
 
 static void server_delete(struct server_s *sl) {
@@ -494,6 +631,7 @@ enum server_process_result {sl_ok,sl_close,sl_again};
 static enum server_process_result server_process(struct server_s *sl,bool readable,bool writable,struct probestate_s *s) {
 	char *crlf;
 	int tmp;
+	char tmp128[128];
 	ssize_t r,w,send;
 	enum server_state enter_state=sl->state;
 
@@ -526,9 +664,9 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 			if (sl->buflen < sizeof(sl->buf)) \
 				sl->buflen+=snprintf(sl->buf+sl->buflen,sizeof(sl->buf)-sl->buflen,__VA_ARGS__); \
 			} while(0)
-		#define OUT(...) do { \
+		#define OUTSTART(STATUS) do { \
 				sl->buflen=0; \
-				OUTADD(__VA_ARGS__); \
+				OUTADD("%s",STATUS); \
 			} while(0)
 		#define OUT_OK() do { \
 				char *lenptr; \
@@ -546,12 +684,17 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		}
 		TRACEs(printf("PROCESSING: %s\n",sl->uri);)
 		if (strcmp(sl->uri,"/")==0) {
-			OUT("%s# temperature server" CRLF,header_ok);
+			OUTSTART(header_ok);
+			OUTADD("# temperature server" CRLF);
 			OUTADD("# /localtime        -> YYYY-MM-DD HH:MM:SS time_t tz_offset" CRLF);
-			OUTADD("# /probes           -> N [probeline] ..." CRLF);
-			OUTADD("# /probe/X          -> [probeline]" CRLF);
-			OUTADD("# /measurementlines -> [units]: probe0 probe1... ..." CRLF);
-			OUTADD("# /gradientlines    -> [units]: probe0 probe1... ..." CRLF);
+			OUTADD("# /measurementlines -> [units]: [probe0] [probe1]... ..." CRLF);
+			OUTADD("# /gradientlines    -> [units]: [probe0] [probe1]... ..." CRLF);
+			OUTADD("# /probes           -> [N] [probeline] ..." CRLF);
+			OUTADD("# /probe/[N]        -> [probeline]" CRLF);
+			OUTADD("# /locations        -> [N] [location] ..." CRLF);
+			OUTADD("# /location/[N]     -> [location]" CRLF);
+			OUTADD("# /idprobes         -> [N] [id] ..." CRLF);
+			OUTADD("# /idprobe/[id]     -> [N]" CRLF);
 			OUTADD("# probeline => time degC %%rh state" CRLF);
 			OUT_OK();
 			break;
@@ -562,21 +705,22 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 			time(&t);
 			tzset();
 			if (!localtime_r(&t,&tm)) {
-				OUT("%s",header_error);
+				OUTSTART(header_error);
 				OUT_NOK();
 				break;
 			}
 			tm.tm_year+=1900;
-			OUT("%s%04d-%02d-%02d %02d:%02d:%02d %ld %+ld" CRLF,header_ok,
+			OUTSTART(header_ok);
+			OUTADD("%04d-%02d-%02d %02d:%02d:%02d %ld %+ld" CRLF,
 				tm.tm_year,tm.tm_mon+1,tm.tm_mday,
 				tm.tm_hour,tm.tm_min  ,tm.tm_sec,
-				(long int)t,timezone);
+				(long int)t,-tm.tm_gmtoff);
 			OUT_OK();
 			break;
 		}
 		if (strcmp(sl->uri,"/probes")==0) {
 			int i;
-			OUT("%s",header_ok);
+			OUTSTART(header_ok);
 			for(i=0;i < s->probes;i++) {
 				OUTADD("%d %s" CRLF,i,measurement_string(&s->probe[i],&s->probe[i].avg,0));
 			}
@@ -585,7 +729,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		}
 		if (strcmp(sl->uri,"/measurementlines")==0) {
 			int i;
-			OUT("%s",header_ok);
+			OUTSTART(header_ok);
 			#define ULINE(STAT,UN,CONV,FLAGS) \
 				OUTADD("%s:",UN); \
 				for(i=0;i < s->probes;i++) \
@@ -601,7 +745,7 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		}
 		if (strcmp(sl->uri,"/gradientlines")==0) {
 			int i;
-			OUT("%s",header_ok);
+			OUTSTART(header_ok);
 			ULINE(grad,"seconds/s",time_string,MS_NOOFFSET|MS_G);
 			ULINE(grad,"degC/s",temp_string,MS_NOOFFSET|MS_G);
 			ULINE(grad,"%rh/s",rh_string,MS_NOOFFSET|MS_G);
@@ -610,22 +754,67 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 			OUT_OK();
 			break;
 		}
+		if (strcmp(sl->uri,"/idprobes")==0) {
+			int i;
+			OUTSTART(header_ok);
+			for(i=0;i < probelookups; i++) {
+				OUTADD("%d %s" CRLF,i,probelookup[i].id);
+			}
+			OUT_OK();
+			break;
+		}
+		if (strcmp(sl->uri,"/locations")==0) {
+			int i;
+			OUTSTART(header_ok);
+			for(i=0;i < probelookups; i++) {
+				OUTADD("%d %s" CRLF,i,probelookup[i].location);
+			}
+			OUT_OK();
+			break;
+		}
+		if (sscanf(sl->uri,"/location/%d",&tmp)==1) {
+			if (tmp<0 || tmp >= probelookups) {
+				OUTSTART(header_bad);
+				OUT_NOK();
+			}
+			else {
+				OUTSTART(header_ok);
+				OUTADD("%s" CRLF,probelookup[tmp].location);
+				OUT_OK();
+			}
+			break;
+		}
 		if (sscanf(sl->uri,"/probe/%d",&tmp)==1) {
 			if (tmp<0 || tmp >= s->probes) {
-				OUT("%s",header_bad);
+				OUTSTART(header_bad);
 				OUT_NOK();
 			}
 			else {
 				struct probedata_s *d;
-				OUT("%s",header_ok);
+				OUTSTART(header_ok);
 				d=dll_head(s->probe[tmp].list);
 				OUTADD("%s" CRLF,measurement_string(&s->probe[tmp],&d->m,0));
 				OUT_OK();
 			}
 			break;
 		}
+		if (sscanf(sl->uri,"/idprobe/%127s",tmp128)==1) {
+			int i;
+			i=probefromid(tmp128);
+			if (i<0) {
+				OUTSTART(header_bad);
+				OUT_NOK();
+			}
+			else {
+				OUTSTART(header_ok);
+				OUTADD("%d" CRLF,i);
+				OUT_OK();
+			}
+			break;
+		}
+	
 		/* otherwise... */
-		OUT("%s",header_notfound);
+		OUTSTART(header_notfound);
 		OUT_NOK();
 		break;
 	case server_reseting:
@@ -668,7 +857,7 @@ int tcpport(struct in_addr interface,int port) {
 
 /* -- do stuff -- */
 
-static const char *mainloop(int listenfd,probeport *pp) {
+static const char *mainloop(int listenfd,probeport *pp,FILE *json) {
 	fd_set readfds,writefds;
 	int maxfd;
 	struct timeval timeout;
@@ -677,17 +866,21 @@ static const char *mainloop(int listenfd,probeport *pp) {
 	const char *e=NULL;
 	struct probestate_s probestate={0,NULL};
 	bool again;
+	int jsonfd;
 
 	if (pp->fd==-1) return "bad data tty";
 	if (listenfd==-1) return "bad listening socket";
+	/* jsonfd optional */
+	jsonfd=(json)?fileno(json):-1;
 
 	for(;;) {
 		/* set up select() */
 		timeout.tv_sec=AVGTIME;
 		timeout.tv_usec=0;
 		FD_ZERO(&readfds); FD_ZERO(&writefds); maxfd=0;
-		FD_SET(pp->fd,&readfds); maxfd=MAX(maxfd,pp->fd);
-		FD_SET(listenfd,&readfds); maxfd=MAX(maxfd,listenfd);
+		if (pp->fd>=0)   {FD_SET(pp->fd,&readfds); maxfd=MAX(maxfd,pp->fd);}
+		if (listenfd>=0) {FD_SET(listenfd,&readfds); maxfd=MAX(maxfd,listenfd);}
+		if (jsonfd>=0)   {FD_SET(jsonfd,&readfds); maxfd=MAX(maxfd,jsonfd);}
 		for_dll(serverlist,sl) {
 			switch(sl->state) {
 			case server_reading:
@@ -704,17 +897,26 @@ static const char *mainloop(int listenfd,probeport *pp) {
 		if (tmp==-1) {e="select failed"; break;}
 
 		/* process select() results */
-		if (FD_ISSET(listenfd,&readfds)) {
+		if (listenfd>=0 && FD_ISSET(listenfd,&readfds)) {
 			int ss;
 			ss=accept(listenfd,NULL,NULL);
 			sl=server_new(ss);
 			if (sl) dll_addhead(serverlist,sl);
 			continue; /* updated serverlist invalidates select results */
 		}
+		/* process JSON injection */
+		if (jsonfd>=0 && FD_ISSET(jsonfd,&readfds)) {
+			bool more;
+			TRACEp(printf("select on %d (JSON injection) good for reading\n",jsonfd);)
+			do {
+				processdata(&probestate,readjsondata(jsonfd,&more,&e));
+			} while(more);
+			if (e) break;
+		}
 		/* process select()'s probelist */
 		if (FD_ISSET(pp->fd,&readfds)) {
 			TRACEp(printf("select on %d good for reading\n",pp->fd);)
-			processdata(&probestate,readmoredata(pp,&e));
+			processdata(&probestate,readserialdata(pp,&e));
 			if (e) break;
 		}
 		/* process select()'s serverlist */
@@ -761,6 +963,7 @@ static const char *mainloop(int listenfd,probeport *pp) {
 int main(int argc,char *argv[]) {
 	const char *e=NULL,*e2=NULL;
 	int ss=-1;
+	FILE *jj=NULL;
 	probeport *pp=NULL;
 	const char *probename=SENSORTTY;
 	struct in_addr interface={htonl(INADDR_ANY)};
@@ -768,6 +971,8 @@ int main(int argc,char *argv[]) {
 
 	progname=*argv++; argc--;
 	if (argc>0) {probename=*argv++; argc--;}
+	
+	fflush(stdin); /* don't pass on stdin to sub-processes */
 
 	/* debugging */
 	DBG(probename="testdatatty";)
@@ -777,16 +982,21 @@ int main(int argc,char *argv[]) {
 	do {
 		pp=probe_new(probename,100);
 		if (!pp) {e="cannot open"; e2=probename; break;}
+		
+		jj=popen(JSONSOURCE,"r"); /* JSON injection stream */
+//		jj=popen("bash -c \"echo hello; sleep 1; echo there\"","r"); /* JSON injection stream */
+		if (!jj) {fprintf(stderr,"Warning: cannot open injection port\n");}
 
 		ss=tcpport(interface,port);
 		if (ss<0) {e="cannot open TCP port"; break;}
 
-		e=mainloop(ss,pp);
+		e=mainloop(ss,pp,jj);
 		if (e) e2=strerror(errno);
 	} while(0);
 
 	if (pp) probe_delete(pp);
 	if (ss!=-1) close(ss);
+	if (jj) pclose(jj);
 
 	if (e) {
 		if (e2) fprintf(stderr,"%s: %s (%s)\n",progname,e,e2);
