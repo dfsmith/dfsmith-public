@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <time.h>
+#include <math.h> /* isnan */
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -197,20 +198,23 @@ static int probefromid(const char *id) {
 	return -1;
 }
 
-static void measurementop(measurement *dest,char op,const measurement *arg,double x) {
+static bool measurementop(measurement *dest,char op,const measurement *arg,double x) {
+	bool okay=true;
 	#define SRC  1
 	#define DEST 2
 	#define BOTH 3
-	#define CHK(READING,NEED,STM,COND) do {				\
-		bool updated=false;					\
-		do{							\
-			if ((NEED & 1) && !arg->have##READING) break;	\
-			if ((NEED & 2) && !dest->have##READING) break;	\
-			if (!(COND)) break;				\
-			STM;						\
-			updated=true;					\
-		} while(0);						\
-		dest->have##READING=updated;				\
+	#define CHK(READING,NEED,STM,COND)							\
+		do {													\
+			bool updated=false;									\
+			do{													\
+				if ((NEED & 1) && !arg->have##READING) break;	\
+				if ((NEED & 2) && !dest->have##READING) break;	\
+				if (!(COND)) break;								\
+				STM;											\
+				updated=true;									\
+			} while(0);											\
+			dest->have##READING=updated;						\
+			if (isnan(dest->READING)) okay=false;				\
 		} while(0)
 
 	#define DIVOP(READING,OP,NEED) CHK(READING,NEED,dest->READING/=arg->READING,arg->READING!=0.0)
@@ -241,6 +245,7 @@ static void measurementop(measurement *dest,char op,const measurement *arg,doubl
 	case 'd': DOOPS(UNIOP,--,DEST); break; /* increment if present */
 	default: break;
 	}
+	return okay;
 }
 
 #define MS_UNITS	1	/* print units */
@@ -480,6 +485,7 @@ static struct probedata_s *readjsondata(int jsonfd,bool *more,const char **error
 static void combineavg(struct probeavg_s *p,const struct probedata_s *newdata) {
 	struct probedata_s *d;
 	double now;
+	bool okay;
 
 	now=timenow();
 
@@ -493,18 +499,20 @@ static void combineavg(struct probeavg_s *p,const struct probedata_s *newdata) {
 		return;
 	}
 
+	okay=true;
 	#define ADD() \
-		measurementop(&p->sum, '+',&d->m,0); \
-		measurementop(&p->sum2,'s',&d->m,0); \
-		measurementop(&p->sumt,'t',&d->m,0); \
-		measurementop(&p->n,   'i',&d->m,0);
+		okay&=measurementop(&p->sum, '+',&d->m,0); \
+		okay&=measurementop(&p->sum2,'s',&d->m,0); \
+		okay&=measurementop(&p->sumt,'t',&d->m,0); \
+		okay&=measurementop(&p->n,   'i',&d->m,0);
 	#define SUB() \
-		measurementop(&p->sum, '-',&d->m,0); \
-		measurementop(&p->sum2,'S',&d->m,0); \
-		measurementop(&p->sumt,'T',&d->m,0); \
-		measurementop(&p->n,   'd',&d->m,0);
+		okay&=measurementop(&p->sum, '-',&d->m,0); \
+		okay&=measurementop(&p->sum2,'S',&d->m,0); \
+		okay&=measurementop(&p->sumt,'T',&d->m,0); \
+		okay&=measurementop(&p->n,   'd',&d->m,0);
 
 	/* periodically recalculate sum to mitigate rounding errors */
+	if (!okay && p->sumreset>10) p->sumreset=10;
 	if (--p->sumreset <= 0) {
 		measurement diff;
 		p->sumreset=6000;
