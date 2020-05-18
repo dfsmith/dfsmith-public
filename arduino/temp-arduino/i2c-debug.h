@@ -65,6 +65,7 @@ typedef struct {
 	} \
 	} while(0)
 #define wait_us(IO,US) fprintf((IO)->out,"\n");
+#define wait_ms(IO,MS) fprintf((IO)->out,"\n");
 
 /* generalize misc and port open/close */
 #define power(io,on)

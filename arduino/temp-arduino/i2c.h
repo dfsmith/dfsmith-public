@@ -20,6 +20,7 @@ extern void i2c_restart(const i2c_io *p);
 extern void i2c_stop(const i2c_io *p);
 
 /* compound read/write */
+extern     bool i2c_read(const i2c_io *p,i2c_addr,u8 reg,u8 *buf,size_t n);
 extern      int i2c_read8 (const i2c_io *p,i2c_addr,u8 reg);
 extern long int i2c_read16(const i2c_io *p,i2c_addr,u8 reg);
 extern long int i2c_read24(const i2c_io *p,i2c_addr,u8 reg);

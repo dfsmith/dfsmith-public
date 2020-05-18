@@ -53,6 +53,7 @@ typedef struct {
 /* wait a half-clock with data I/O */
 #define w(IO) delayMicroseconds((IO)->half_clock)
 #define wait_us(IO,US) delayMicroseconds(US)
+#define wait_ms(IO,MS) delay(MS)
 
 /* generalize misc and port open/close */
 #define power(io,on) /* energize 5V line */

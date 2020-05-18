@@ -55,6 +55,7 @@ struct shtport_s {
 
 /* functions that might be exported sometime */
 
+#if TRACING
 static void serialtrace(char *fmt,...) {
 	char tmp[80];
 	va_list args;
@@ -63,6 +64,7 @@ static void serialtrace(char *fmt,...) {
 	va_end(args);
 	Serial.print(tmp);
 }
+#endif
 
 /* -- CRC8 and bit reverse -- */
 
@@ -284,10 +286,11 @@ static int sht_start(shtport *s,int fast) {
 
 static void sht_powercycle(shtport *s) {
 	const i2c_io *io=s->io;
+	(void)io; /* prevent warning when io unused */
 	power(io,0);
-	wait_us(io,1000000);
+	wait_ms(io,1000);
 	power(io,1);
-	wait_us(io,200000);
+	wait_ms(io,200);
 	}
 
 static void sht_init(shtport *s) {

@@ -7,9 +7,13 @@
 #endif
 #include "i2c.h"
 
-//#include "serialtrace.h"
-//#define TR(x) serialtrace x
+#define TRACING 0
+#if TRACING
+#include "serialtrace.h"
+#define TR(x) serialtrace x
+#else
 #define TR(x)
+#endif
 
 void i2c_deinit(const i2c_io *io) {
 	closeport(io);
@@ -44,7 +48,9 @@ void i2c_start(const i2c_io *io) {
 bool i2c_send(const i2c_io *io,u8 b) {
 	bool ack;
 	int i;
-u8 c=b;
+	#if TRACING
+	u8 c=b;
+	#endif
 	for(i=0;i<8;i++,b<<=1) {
 		dw(io,b&128);
 		w(io);
@@ -58,7 +64,7 @@ u8 c=b;
 	w(io);
 	ack=dr(io);
 	clkl(io);
-TR(("send 0x%X ack=%d\n",c,ack));
+	TR(("send 0x%X ack=%d\n",c,ack));
 	return ack;
 }
 
@@ -78,38 +84,53 @@ u8 i2c_receive(const i2c_io *io,bool ack) {
 	w(io);
 	clkl(io);
 	ddin(io);
+	TR(("receive (ack=%d) 0x%X\n",ack,b));
 	return b;
 }
 
-static long int readN(const i2c_io *io,i2c_addr addr,u8 reg,int n) {
-	long int x=-1;
+bool i2c_read(const i2c_io *io,i2c_addr addr,u8 reg,u8 *buf,size_t n) {
+	bool rc=false;
 	do {
 		i2c_start(io);
 		if (i2c_send(io,addr<<1 | 0)!=0) break;
 		if (i2c_send(io,reg)!=0) break;
-//		i2c_restart(io);
-i2c_stop(io);
-w(io);w(io); w(io);w(io);
-i2c_start(io);
+		//i2c_restart(io);
+		i2c_stop(io);
+		w(io);w(io); w(io);w(io);
+		i2c_start(io);
 		if (i2c_send(io,addr<<1 | 1)!=0) break;
-		for(x=0;n>0;n--)
-			x=(x<<8) | i2c_receive(io,!(n>1));
+		for(;n>0;n--)
+			*(buf++)=i2c_receive(io,!(n>1));
+		rc=true;
 	} while(0);
 	i2c_stop(io);
-	TR(("read reg=0x%X -> 0x%lX\n",reg,x));
-	return x;
+	TR(("read(%d)->%d\n",(int)n,rc));
+	return rc;
 }
 
 int i2c_read8(const i2c_io *io,i2c_addr addr,u8 reg) {
-	return readN(io,addr,reg,1);
+	u8 buf[1];
+	if (!i2c_read(io,addr,reg,buf,sizeof(buf))) return -1;
+	return buf[0];
 }
 
 long int i2c_read16(const i2c_io *io,i2c_addr addr,u8 reg) {
-	return readN(io,addr,reg,2);
+	u8 buf[2];
+	long int r;
+	if (!i2c_read(io,addr,reg,buf,sizeof(buf))) return -1;
+	       r =buf[0];
+	r<<=8; r|=buf[1];
+	return r;
 }
 
 long int i2c_read24(const i2c_io *io,i2c_addr addr,u8 reg) {
-	return readN(io,addr,reg,3);
+	u8 buf[3];
+	long int r;
+	if (!i2c_read(io,addr,reg,buf,sizeof(buf))) return -1;
+	       r =buf[0];
+	r<<=8; r|=buf[1];
+	r<<=8; r|=buf[2];
+	return r;
 }
 
 bool i2c_write8(const i2c_io *io,i2c_addr addr,u8 reg,u8 val) {

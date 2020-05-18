@@ -3,6 +3,13 @@
 #include "sht.h"
 #include "bmp.h"
 
+#if 0
+#include "serialtrace.h"
+#define TR(X) serialtrace X
+#else
+#define TR(X)
+#endif
+
 #define LED_PIN 13
 #define INV (-1000.0)
 #define NOSTATE 'i'
@@ -13,6 +20,7 @@ struct probedata_s {
 	/* init part */
 	const char *name;
 	int number;
+	bool started;
 	bool (*init)(probedata *p);
 	bool (*getreading)(probedata *p);
 	union {
@@ -33,6 +41,7 @@ struct probedata_s {
 
 static bool badval(probedata *p) {
 	p->temp_c=p->rh_pc=p->pressure_pa=INV;
+	p->state=NOSTATE;
 	return false;
 }
 
@@ -51,18 +60,26 @@ static bool shtgetreading(probedata *p) {
 	return true;
 }
 
-static bool bmpinit(probedata *p) {
-	p->port.bmp=bmp_new(&p->pins.i2c_pins);
+static bool bmp1init(probedata *p) {
+	p->port.bmp=bmp_new(&p->pins.i2c_pins,1);
+	return !!p->port.bmp;
+}
+
+static bool bmpanyinit(probedata *p) {
+	p->port.bmp=bmp_new(&p->pins.i2c_pins,1);
+	if (!p->port.bmp)
+		p->port.bmp=bmp_new(&p->pins.i2c_pins,0);
 	return !!p->port.bmp;
 }
 
 static bool bmpgetreading(probedata *p) {
-	if (!p->port.bmp || !bmp_getreading(p->port.bmp))
+	bmp_port *b=p->port.bmp;
+	if (!b || !b->m->startreading(b))
 		return badval(p);
 	p->state=NOSTATE;
-	p->temp_c=bmp_getlasttemp_degc(p->port.bmp);
-	p->rh_pc=INV;
-	p->pressure_pa=bmp_getlastpressure_pascal(p->port.bmp);
+	p->temp_c=b->m->getlasttemp_degc(b);
+	p->rh_pc=b->m->getlasthumidity_rel(b);
+	p->pressure_pa=b->m->getlastpressure_pascal(b);
 	return true;
 }
 
@@ -83,30 +100,30 @@ static bool switch_pd_getreading(probedata *p) {
 }
 
 static probedata probe[]={
-	{"garage box",    0,shtinit,shtgetreading,{A5,A4,200,1,0}},
-	{"garage outside",1,shtinit,shtgetreading,{A2,A3,200,1,0}},
-	{"garage inside", 2,bmpinit,bmpgetreading,{ 2, 3,200,0,0}},
-	{"garage door",   3,switch_pd_init,switch_pd_getreading,{4}},
+	{"garage box",    0,false,shtinit,shtgetreading,{A5,A4,200,1,0}},
+	{"garage outside",1,false,shtinit,shtgetreading,{A2,A3,200,1,0}},
+	{"garage inside", 2,false,bmpanyinit,bmpgetreading,{ 2, 3,200,0,0}},
+	{"garage door",   3,false,switch_pd_init,switch_pd_getreading,{4}},
 };
 #define PROBES (sizeof(probe)/sizeof(*probe))
 
 void setup(void) {
-	int i;
-	bool r;
+	unsigned int i;
 	probedata *p;
 	pinMode(LED_PIN,OUTPUT);
-	Serial.begin(57600);
+	Serial.begin(115200);
 	Serial.println("# start SHT temperature and humidity capture");
 	Serial.println("# Commands: N (names)");
 
 	for(i=0;i<PROBES;i++) {
 		p=&probe[i];
-		r=p->init(&probe[i]);
+		if (p->started) continue;
+		p->started=p->init(p);
 		Serial.print("# probe ");
 		Serial.print(i);
 		Serial.print(" \"");
 		Serial.print(p->name);
-		Serial.println(r?"\" started":"\" no_start");
+		Serial.println(p->started?"\" started":"\" no_start");
 	}
 }
 
@@ -144,6 +161,7 @@ static void printreading(probedata *p) {
 }
 
 static void heartbeat(void) {
+	TR(("beat\n"));
 	digitalWrite(LED_PIN,HIGH);
 	delay(100);
 	digitalWrite(LED_PIN,LOW);
@@ -155,18 +173,23 @@ static void heartbeat(void) {
 }
 
 void loop(void) {
-	int i;
+	unsigned int i;
 	probedata *p;
 
 	heartbeat();
 
 	for(i=0;i<PROBES;i++) {
 		p=&probe[i];
+		if (!p->started) {
+			TR(("# restarting %d\n",i));
+			p->started=p->init(p);
+			continue;
+		}
 		p->getreading(p);
 		printreading(p);
 	}
 
-	if (Serial.available()>0) {
+	while(Serial.available()>0) {
 		int cmd;
 		cmd=Serial.read();
 		switch(cmd) {
@@ -178,6 +201,9 @@ void loop(void) {
 				Serial.print(" ");
 				Serial.println(p->name);
 			}
+			break;
+		case '?':
+			Serial.println("N - probe list");
 			break;
 		default:
 			break;

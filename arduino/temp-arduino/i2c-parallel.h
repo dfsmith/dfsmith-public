@@ -9,6 +9,8 @@
 //extern "C" {
 #endif
 
+#if 0
+
 /* convenience only */
 #ifndef PARALLEL_PORT_IO_ADDR_0
 #define PARALLEL_PORT_IO_ADDR_0 0x03BC
@@ -99,4 +101,5 @@ int sht_readmany(shtport *s,...);
 //}
 #endif
 
+#endif /* 0 */
 #endif /* defined dfs_sht_h */

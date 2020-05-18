@@ -1,4 +1,4 @@
-/* > serialtrace.cpp
+/* > serialtrace.cpp */
 /* (C) 2005,2013 Daniel F. Smith <dfs1122@gmail.com> */
 /*
  * This is free software covered by the Lesser GPL.

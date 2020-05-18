@@ -5,7 +5,7 @@ export PATH="$PATH:/home/dfsmith/bin"
 
 startdaemon() {
 	if [ -x /home/dfsmith/bin/sensord -a -r /dev/ttyarduino ]; then
-		stty 57600 </dev/ttyarduino
+		stty 115200 </dev/ttyarduino
 		/home/dfsmith/bin/sensord &
 	fi
 }
