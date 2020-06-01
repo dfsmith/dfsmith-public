@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# Daniel F. Smith, 2020
+# (C) Daniel F. Smith, 2020
+# SPDX-License-Identifier: LGPL-2.1
+# Other licenses on request.
 
 import os
 import errno
