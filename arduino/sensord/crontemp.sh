@@ -246,6 +246,7 @@ set yrange [0:100]
 plot "${date}-%rh.log" \
 	   $(probeopt 0),\
 	"" $(probeopt 1),\
+	"" $(probeopt 2),\
 	"" $(probeopt 4),\
 	"" $(probeopt 5)
 set output
@@ -257,6 +258,7 @@ set yrange [0:20]
 plot "${date}-ah.log" \
 	   $(probeopt 0),\
 	"" $(probeopt 1),\
+	"" $(probeopt 2),\
 	"" $(probeopt 4),\
 	"" $(probeopt 5)
 set output
