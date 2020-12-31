@@ -111,8 +111,8 @@ set ylabel "temperature /{/Symbol \260}F"
 plot  "minmax-degC.log" using $(boxxy 'ctof($3)'  'ctof($4)' ) $col1 title "Garage box",\
       ""                using $(boxxy 'ctof($5)'  'ctof($6)' ) $col2 title "Garage outside",\
       ""                using $(boxxy 'ctof($7)'  'ctof($8)' ) $col3 title "Garage interior",\
-      ""                using $(boxxy 'ctof($9)'  'ctof($10)') $col4 title "Kitchen",\
-      ""                using $(boxxy 'ctof($11)' 'ctof($12)') $col5 title "Upstairs"
+      ""                using $(boxxy 'ctof($9)'  'ctof($10)') $col4 title "Kitchen"
+#      ""                using $(boxxy 'ctof($11)' 'ctof($12)') $col5 title "Upstairs"
 set output
 
 set output "daily-rh.png"
@@ -120,8 +120,8 @@ set title "Relative humidity range over day"
 set ylabel "relative humidity /%"
 plot  "minmax-%rh.log"   using $(boxxy '$3'  '$4' ) $col1 title "Garage box",\
       ""                 using $(boxxy '$5'  '$6' ) $col2 title "Garage outside",\
-      ""                 using $(boxxy '$9'  '$10') $col3 title "Kitchen",\
-      ""                 using $(boxxy '$11' '$12') $col4 title "Upstairs"
+      ""                 using $(boxxy '$9'  '$10') $col3 title "Kitchen"
+#      ""                 using $(boxxy '$11' '$12') $col4 title "Upstairs"
 set output
 
 set output "daily-ah.png"
@@ -189,9 +189,7 @@ plotdate() {
 	mintime=$(( `getstarttime "${date}-degC.log"` + $tz ))
 	maxtime=$(( $mintime + 24*60*60 ))
 	
-	
-	
-	nice gnuplot <<EOF 1>&2
+	nice gnuplot <<EOF 2>&1 | grep -v "Skipping data file with no valid points"
 set timefmt "%s"
 set xdata time
 set format x "%F\n%T"
@@ -227,8 +225,8 @@ plot "${date}-degC.log" \
 	   $(probeopt 0 ctof 6),\
 	"" $(probeopt 1 ctof 6),\
 	"" $(probeopt 2 ctof 6),\
-	"" $(probeopt 4 ctof 6),\
-	"" $(probeopt 5 ctof 6)
+	"" $(probeopt 4 ctof 6)
+#	"" $(probeopt 5 ctof 6)
 set output
 
 set terminal ${terminal} "chart_${date//\//_}_hpa"
@@ -247,8 +245,8 @@ plot "${date}-%rh.log" \
 	   $(probeopt 0),\
 	"" $(probeopt 1),\
 	"" $(probeopt 2),\
-	"" $(probeopt 4),\
-	"" $(probeopt 5)
+	"" $(probeopt 4)
+#	"" $(probeopt 5)
 set output
 
 set terminal ${terminal} "chart_${date//\//_}_ah"
@@ -259,8 +257,8 @@ plot "${date}-ah.log" \
 	   $(probeopt 0),\
 	"" $(probeopt 1),\
 	"" $(probeopt 2),\
-	"" $(probeopt 4),\
-	"" $(probeopt 5)
+	"" $(probeopt 4)
+#	"" $(probeopt 5)
 set output
 
 set terminal ${terminal} "chart_${date//\//_}_state"
@@ -313,13 +311,25 @@ if [ "$1" != "" ]; then
 	exit
 fi
 
+is_number() {
+	if [ "$1" -eq "$1" ] 2>/dev/null; then
+		return 0
+	fi
+	return 1
+}
+
 # cron script: get new sensor data
 currentseconds=`date +%s`
-getsensorlines | addah | ( 
-	read unitcolon seconds rest
+getsensorlines | addah | (
+	iseconds=0
+	read unitcolon slist
 	if [ "$unitcolon" != "seconds:" ]; then exit; fi
-	iseconds="${seconds%.*}" # effectively (int)floor(seconds)
-	if [ "$iseconds" = "" ]; then exit; fi
+	for s in $slist; do
+		is="${s%.*}" # effectively (int)floor(seconds)
+		if ! is_number $is; then continue; fi
+		if [ $is -gt $iseconds ]; then iseconds=$is; seconds=$s; fi
+	done
+	if [ $iseconds -le 0 ]; then exit; fi
 	
 	# check status
 	dsec=$(( $currentseconds - $iseconds ))

@@ -262,7 +262,8 @@ static char *double_string(char *buf,size_t buflen,const char *fmt,double val,co
 	static char *TYPE##_string(const struct probeavg_s *ctx,const measurement *m,uint flags) { \
 		static char buf[24]; \
 		double offset=(flags & MS_NOOFFSET)?0.0:ctx->offset.TYPE + ADD; \
-		const char *fmt=(!m || !m->have##TYPE)?NULL:(flags & MS_G)?GFMT"%s":FMT"%s"; \
+		bool valid=(m && m->have##TYPE && ctx->n.time > 0); \
+		const char *fmt=(!valid)?NULL:(flags & MS_G)?GFMT"%s":FMT"%s"; \
 		return double_string(buf,sizeof(buf),fmt,m->TYPE + offset,(flags & MS_UNITS)?UNIT:""); \
 	}
 VALUE_STRING_FN(time,    "s",    epoch_s,"%.4g","%.1f")
