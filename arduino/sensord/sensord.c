@@ -492,6 +492,7 @@ static struct probedata_s *readjsondata(int jsonfd,bool *more,const char **error
 		}
 		
 		memset(&r,0,sizeof(r));
+		r.probe=-1;
 		cb.context=&r;
 		TRACEj(printf("json_parse(\"%s\")\n",buf);)
 		end=json_parse(&cb,buf);
@@ -607,6 +608,7 @@ static void combineavg(struct probeavg_s *p,const struct probedata_s *newdata) {
 
 static void processdata(struct probestate_s *s,struct probedata_s *d) {
 	if (!s || !d) return;
+	if (d->probe < 0) return;
 	if (d->probe >= MAXPROBES) return;
 	if (d->probe >= s->probes) {
 		if (s->probes==0 && s->probe!=NULL) {free(s->probe); s->probe=NULL;}
