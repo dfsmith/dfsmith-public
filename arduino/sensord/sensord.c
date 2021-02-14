@@ -28,12 +28,14 @@ typedef unsigned int uint;
 #define TRACEp(x) x /* serial port */
 #define TRACEs(x) x /* sockets */
 #define TRACEc(x) x /* calculations */
+#define TRACEj(x) x /* JSON */
 #define TRACE(x) x
 #define DBG(x) x
 #else
 #define TRACEp(x)
 #define TRACEs(x)
 #define TRACEc(x)
+#define TRACEj(x)
 #define TRACE(x)
 #define DBG(x)
 #endif
@@ -62,6 +64,7 @@ probeinfo probelookup[]={
 	{"arduino-3","garage door"},
 	{"net:30:AE:A4:38:33:A8","kitchen"},
 	{"net:A4:CF:12:24:97:84","master bedroom"},
+	{"net:24:A1:60:57:5B:D0","black box"},
 };
 static const int probelookups=lengthof(probelookup);
 
@@ -135,17 +138,23 @@ typedef struct {
 	double rh;
 	double pressure;
 	double state;
+	double weight;
+	double potential;
+	double signal;
 
 	uint havetime:1;
 	uint havetemp:1;
 	uint haverh:1;
 	uint havepressure:1;
 	uint havestate:1;
+	uint haveweight:1;
+	uint havepotential:1;
+	uint havesignal:1;
 } measurement;
-#define MEASUREMENT_NULL {0,0.0,0.0,0.0,0.0, 0,0,0,0,0}
+#define MEASUREMENT_NULL {0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, 0,0,0,0,0,0,0,0}
 const measurement measurement_null=MEASUREMENT_NULL;
 /* zero is used for clearing stats */
-#define MEASUREMENT_ZERO {0,0.0,0.0,0.0,0.0, 1,1,1,1,1}
+#define MEASUREMENT_ZERO {0,0.0,0.0,0.0,0.0,0.0,0.0,0.0, 1,1,1,1,1,1,1,1}
 const measurement measurement_zero=MEASUREMENT_ZERO;
 
 struct probedata_s {
@@ -224,10 +233,15 @@ static bool measurementop(measurement *dest,char op,const measurement *arg,doubl
 	#define ADDOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP x + arg->READING,true)
 	#define SQUOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP arg->READING * arg->READING,true)
 	#define TIMOP(READING,OP,NEED) CHK(READING,NEED,dest->READING OP arg->READING * arg->time,true)
-	#define DOOPS(DOOP,OP,NEED) do{				\
-		DOOP(time,OP,NEED); DOOP(temp,OP,NEED);		\
-		DOOP(rh,OP,NEED);   DOOP(pressure,OP,NEED);	\
-		DOOP(state,OP,NEED);				\
+	#define DOOPS(DOOP,OP,NEED) do{	\
+		DOOP(time,OP,NEED);         \
+		DOOP(temp,OP,NEED);			\
+		DOOP(rh,OP,NEED);			\
+		DOOP(pressure,OP,NEED);		\
+		DOOP(state,OP,NEED);		\
+		DOOP(weight,OP,NEED);		\
+		DOOP(potential,OP,NEED);	\
+		DOOP(signal,OP,NEED);		\
 		}while(0)
 	switch(op) {
 	case '=': *dest=*arg;           break;
@@ -266,20 +280,26 @@ static char *double_string(char *buf,size_t buflen,const char *fmt,double val,co
 		const char *fmt=(!valid)?NULL:(flags & MS_G)?GFMT"%s":FMT"%s"; \
 		return double_string(buf,sizeof(buf),fmt,m->TYPE + offset,(flags & MS_UNITS)?UNIT:""); \
 	}
-VALUE_STRING_FN(time,    "s",    epoch_s,"%.4g","%.1f")
-VALUE_STRING_FN(temp,    "degC", 0,      "%.3g","%.2f")
-VALUE_STRING_FN(rh,      "%rh",  0,      "%.3g","%.1f")
-VALUE_STRING_FN(pressure,"hPa",  0,      "%.4g","%.1f")
-VALUE_STRING_FN(state,   "state",0,      "%.2g","%.1f")
+VALUE_STRING_FN(time,     "s",    epoch_s,"%.4g","%.1f")
+VALUE_STRING_FN(temp,     "degC", 0,      "%.3g","%.2f")
+VALUE_STRING_FN(rh,       "%rh",  0,      "%.3g","%.1f")
+VALUE_STRING_FN(pressure, "hPa",  0,      "%.4g","%.1f")
+VALUE_STRING_FN(state,    "state",0,      "%.2g","%.1f")
+VALUE_STRING_FN(weight,   "g",    0,      "%.3g","%.0f")
+VALUE_STRING_FN(potential,"V",    0,      "%.3g","%.2f")
+VALUE_STRING_FN(signal,   "dBm",  0,      "%.3g","%.0f")
 
 static char *measurement_string(const struct probeavg_s *ctx,const measurement *m,unsigned int flags) {
 	static char line[128];
-	snprintf(line,sizeof(line),"%s %s %s %s %s",
+	snprintf(line,sizeof(line),"%s %s %s %s %s %s %s %s",
 		time_string(ctx,m,flags),
 		temp_string(ctx,m,flags),
 		rh_string(ctx,m,flags),
 		pressure_string(ctx,m,flags),
-		state_string(ctx,m,flags));
+		state_string(ctx,m,flags),
+		weight_string(ctx,m,flags),
+		potential_string(ctx,m,flags),
+		signal_string(ctx,m,flags));
  	return line;
 }
 
@@ -340,6 +360,9 @@ static int decodedata(probeport *p) {
 			if (strcmp("degC", l)==0) SETM(temp,x);
 			if (strcmp("%rh",  l)==0) SETM(rh,x);
 			if (strcmp("state",l)==0) SETM(state,x);
+			if (strcmp("g",    l)==0) SETM(weight,x);
+			if (strcmp("V",    l)==0) SETM(potential,x);
+			if (strcmp("dBm",  l)==0) SETM(signal,x);
 
 			if (!e) break;
 			l=e;
@@ -402,11 +425,12 @@ static void storejson(const json_valuecontext *root,const json_value *v,void *co
 	
 	switch(v->type) {
 	case json_type_string:
-		if (json_matches_path(root,"id",NULL)) {
+		if (json_matches_path(root,"id",NULL) || json_matches_path(root,"lora","data","id",NULL)) {
 			char buf[32];
 			if (json_string_to_utf8(buf,sizeof(buf),&v->string) >= sizeof(buf))
 				return; /* too long */
 			p->probe=probefromid(buf);
+			TRACEj(printf("JSON from probe %d (%s)\n",p->probe,buf);)
 			return;
 		}
 		break;
@@ -415,17 +439,25 @@ static void storejson(const json_valuecontext *root,const json_value *v,void *co
 			p->probe=v->number;
 			return;
 		}
-		#define MATCH(KEY,STORE) \
-			if (json_matches_path(root,KEY,NULL)) { \
+		#define MATCH(STORE,...) \
+			if (json_matches_path(root,__VA_ARGS__,NULL)) { \
 				p->m.STORE=v->number; \
 				p->m.have##STORE=1; \
+				TRACEj(printf("captured %s as %f\n",#STORE,v->number);) \
 				return; \
 			}
-		MATCH("s",time);
-		MATCH("degc",temp);
-		MATCH("rh",rh);
-		MATCH("hpa",pressure);
-		MATCH("state",state);
+		MATCH(time,"s");
+		MATCH(temp,"degc");
+		MATCH(rh,"rh");
+		MATCH(pressure,"hpa");
+		MATCH(state,"state");
+		MATCH(weight,"g");
+		MATCH(potential,"V");
+		MATCH(signal,"dBm");
+
+		MATCH(signal,"lora","RSSI");
+		MATCH(weight,"lora","data","g_a");
+		MATCH(potential,"lora","data","V");
 		break;
 	default:
 		break;
@@ -437,6 +469,7 @@ static void storejson(const json_valuecontext *root,const json_value *v,void *co
 static void ignorejsonerr(const json_valuecontext *c,const char *e,json_in s,json_in h,const char *m,void *context) {
 	struct probedata_s *p=context;
 	(void)c; (void)e; (void)s; (void)h; (void)m; (void)context;
+	TRACEj(printf("JSON error %s\n",e);)
 	memset(p,0,sizeof(*p));
 	return;
 }
@@ -460,6 +493,7 @@ static struct probedata_s *readjsondata(int jsonfd,bool *more,const char **error
 		
 		memset(&r,0,sizeof(r));
 		cb.context=&r;
+		TRACEj(printf("json_parse(\"%s\")\n",buf);)
 		end=json_parse(&cb,buf);
 		if (end) {
 			size_t removed=end-buf;
@@ -749,6 +783,9 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 			ULINE(avg,"%rh",rh_string,0);
 			ULINE(avg,"hPa",pressure_string,0);
 			ULINE(avg,"state",state_string,0);
+			ULINE(avg,"weight",weight_string,0);
+			ULINE(avg,"potential",potential_string,0);
+			ULINE(avg,"signal",signal_string,0);
 			OUT_OK();
 			break;
 		}
@@ -760,6 +797,9 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 			ULINE(grad,"%rh/s",rh_string,MS_NOOFFSET|MS_G);
 			ULINE(grad,"hPa/s",pressure_string,MS_NOOFFSET|MS_G);
 			ULINE(grad,"state/s",state_string,MS_NOOFFSET|MS_G);
+			ULINE(grad,"weight/s",weight_string,MS_NOOFFSET|MS_G);
+			ULINE(grad,"potential/s",potential_string,MS_NOOFFSET|MS_G);
+			ULINE(grad,"signal/s",signal_string,MS_NOOFFSET|MS_G);
 			OUT_OK();
 			break;
 		}
@@ -993,7 +1033,6 @@ int main(int argc,char *argv[]) {
 		if (!pp) {e="cannot open"; e2=probename; break;}
 		
 		jj=popen(JSONSOURCE,"r"); /* JSON injection stream */
-//		jj=popen("bash -c \"echo hello; sleep 1; echo there\"","r"); /* JSON injection stream */
 		if (!jj) {fprintf(stderr,"Warning: cannot open injection port\n");}
 
 		ss=tcpport(interface,port);
