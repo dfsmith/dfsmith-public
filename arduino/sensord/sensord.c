@@ -716,7 +716,11 @@ static enum server_process_result server_process(struct server_s *sl,bool readab
 		#define OUT_OK() do { \
 				char *lenptr; \
 				lenptr=strstr(sl->buf,LEN8MARKER); \
-				if (lenptr) sprintf(lenptr,"%8zu",sl->buflen-sizeof(header_ok)+1); \
+				if (lenptr) { \
+					char tmp[sizeof(LEN8MARKER)]; \
+					sprintf(tmp,"%*zu",(int)sizeof(tmp)-1,sl->buflen-sizeof(header_ok)+1); \
+					memcpy(lenptr,tmp,sizeof(tmp)-1); \
+				} \
 				sl->state=server_writing; \
 			} while(0)
 		#define OUT_NOK() do {sl->state=server_writing; sl->noreset=true; } while(0)
