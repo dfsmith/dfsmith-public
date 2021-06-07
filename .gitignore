@@ -1,2 +1,8 @@
 *~
 frys/node_modules
+*.o
+*.d
+*.a
+*.hex
+*.elf
+.vscode/

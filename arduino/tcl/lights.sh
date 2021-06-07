@@ -50,6 +50,9 @@ setdate() {
 }
 
 appropriate() {
+	echo "off"
+	return
+	
 	if [ "$TESTDATE" != "now" ]; then
 		echo >&2 "condition on `setdate`"
 	fi
