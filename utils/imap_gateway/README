@@ -1,0 +1,2 @@
+pip3 install twisted service_identity exchangelib selenium splinter webdriver_manager
+./imap-gateway.py & pid=$!; sleep 1 && getmail -r test; kill $pid; wait
