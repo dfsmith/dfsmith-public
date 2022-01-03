@@ -1,2 +1,15 @@
-pip3 install twisted service_identity exchangelib selenium splinter webdriver_manager
-./imap-gateway.py & pid=$!; sleep 1 && getmail -r test; kill $pid; wait
+$ pip3 install twisted service_identity exchangelib selenium splinter webdriver_manager
+$ cat ~/.getmail/test
+[retriever]
+type = SimpleIMAPRetriever
+server = localhost
+port = 1143
+username = testuser
+password = password
+
+[destination]
+type = MDA_external
+path = /usr/bin/procmail
+unixfrom = true
+
+$ ./imap-gateway.py & pid=$!; sleep 1 && getmail -r test; kill $pid; wait

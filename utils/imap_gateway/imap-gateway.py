@@ -2,9 +2,8 @@
 
 # See https://github.com/twisted/twisted/blob/imap-howto-536-2/doc/mail/tutorial/imapserver/imapserver.xhtml
 
-from exchange_mailbox import ExchangeMailbox
 from zope.interface.declarations import implementer
-from twisted.cred.checkers import InMemoryUsernamePasswordDatabaseDontUse
+from twisted.cred import error
 from twisted.cred.portal import Portal
 from twisted.cred.portal import IRealm
 from twisted.internet import reactor, defer, protocol
@@ -12,18 +11,35 @@ from twisted.mail import imap4
 from zope.interface import implementer
 
 import logging
+logging.basicConfig(
+    format="%(levelname)-6s | %(filename)s:%(lineno)d: %(message)s",
+    level=logging.NOTSET
+)
 log = logging.getLogger(__name__)
 
+from exchange_mailbox import ExchangeMailbox
+from exchange_credentials import ExchangeAccount, ExchangeCredentialsChecker
 
 class GwAccount(imap4.MemoryAccount):
     mailboxFactory = ExchangeMailbox
 
-    def __init__(self, name):
-        imap4.MemoryAccount.__init__(self, name)
+    def __init__(self, account: ExchangeAccount):
+        log.info(f"account {account}")
+        if isinstance(account, error.UnauthorizedLogin):
+            imap4.MemoryAccount.__init__(self, account)
+        assert(isinstance(account, ExchangeAccount))
+        log.info(f"GwAccount instantiated with {account.username}")
+
+        self.acct_info = account
+        imap4.MemoryAccount.__init__(self, account.username)
+        self.addMailbox("inbox")
 
     def _emptyMailbox(self, name, id):
-        return self.mailboxFactory()
+        return self.mailboxFactory(self.acct_info.ews_account, name, id)
 
+    def logout(self):
+        log.info(f"Logout {self.acct_info.username}")
+        return None
 
 @implementer(IRealm)
 class MailUserRealm(object):
@@ -37,9 +53,7 @@ class MailUserRealm(object):
             if requestedInterface in self.agentInterfaces:
                 # return an instance of the correct class
                 agent = self.agentInterfaces[requestedInterface](agentId)
-                # null logout function: take no arguments and do nothing
-                def logout(): return None
-                return defer.succeed((requestedInterface, agent, logout))
+                return defer.succeed((requestedInterface, agent, agent.logout))
         # none of the requested interfaces was supported
         raise KeyError("None of the requested interfaces is supported")
 
@@ -72,15 +86,9 @@ class IMAPFactory(protocol.Factory):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        format="%(levelname)-6s | %(filename)s:%(lineno)d: %(message)s",
-        level=logging.NOTSET
-    )
 
     portal = Portal(MailUserRealm())
-    checker = InMemoryUsernamePasswordDatabaseDontUse()
-    checker.addUser(b"testuser", b"password")
-    portal.registerChecker(checker)
+    portal.registerChecker(ExchangeCredentialsChecker())
 
     factory = IMAPFactory()
     factory.portal = portal
