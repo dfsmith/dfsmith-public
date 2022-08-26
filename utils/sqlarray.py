@@ -11,7 +11,7 @@ from collections import UserDict
 
 class SQLArray(UserDict):
     """
-    A class that makes a SQLite3 database into an array-like object.
+    A class that makes a SQLite3 database into a persistent array-like object.
 
     Each key at the top level is the name of a database table.  Queries
     can be run against tables.  For example:
@@ -19,8 +19,9 @@ class SQLArray(UserDict):
     from sqlarray import SQLArray
     table = SQLArray("my_filename")["mytable"]
     table["hello"] = "world"
+    table["there"] = "everyone"
     for key in table.search("or"):
-        print(table[key])
+        print(table[key]) # prints "world"
     """
 
     def __init__(self, sqlfilename, create=True, convert=None, unconvert=None):
