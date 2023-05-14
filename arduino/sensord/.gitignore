@@ -1,4 +1,5 @@
 sensord
+testsensord
 *.o
 htdocs
 stack-json
