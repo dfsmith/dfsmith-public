@@ -6,3 +6,4 @@ frys/node_modules
 *.hex
 *.elf
 .vscode/
+testsensord
