@@ -41,7 +41,9 @@ static String curl(String filepart) {
         int status=http.GET();
         Serial.printf("GET %s -> %d\n",url.c_str(),status);
         if (status!=HTTP_CODE_OK) return "";
-        return http.getString();
+        String val=http.getString();
+        val.trim();
+        return val;
 }
 
 static bool gethttp_time() {
