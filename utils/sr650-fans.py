@@ -18,8 +18,10 @@ class ShellHandler:
         channel = self.ssh.invoke_shell()
         self.stdin = channel.makefile("wb")
         self.stdout = channel.makefile("r")
+
         self.finished = False
         self.sleep_time = 30
+        self.rx_watchdog = True
 
     def __del__(self):
         self.ssh.close()
@@ -47,10 +49,10 @@ class ShellHandler:
         return lines
 
     def finish(self):
-        finished = True
+        self.finished = True
 
     def typersleep(self, seconds):
-        sleep_time = seconds
+        self.sleep_time = seconds
 
     def typer(self, cmds):
         while not self.finished:
@@ -59,24 +61,35 @@ class ShellHandler:
                 self.stdin.write(cmd + "\n")
                 self.stdin.flush()
                 time.sleep(0.5)
-            print(f"sleeping for {self.sleep_time}s")
-            time.sleep(self.sleep_time)
+
+            print(f"sleeping for {self.sleep_time}s finished={self.finished}")
+            if not self.finished:
+                time.sleep(self.sleep_time)
+
+    def watchdog(self, seconds):
+        while not self.finished:
+            self.rx_watchdog = False
+            time.sleep(seconds)
+            if not self.rx_watchdog:
+                print("watchdog triggered")
+                self.stdin.close()
+                self.finished = True
 
     def monitor(self):
         lines = []
         for line in self.stdout:
+            self.rx_watchdog = True
             line = line.strip("\r\n")
             print(f"rx <<<{line}>>>")
             lines.append(line)
             if line == "ok" or line.startswith("Error:"):
                 break
-
         return lines
 
 
-def sr_handler():
+def sr_handler(host, user, passwd):
     print("start sr_handler")
-    sh = ShellHandler("10.0.0.139", "USERID", "mouse")
+    sh = ShellHandler(host, user, passwd)
 
     crit_interval = 120
     crit_temp = {
@@ -85,15 +98,19 @@ def sr_handler():
         "CPU2 Temp": 60.0,
         "PCH Temp": 60.0,
     }
+    cmds = ["temps", "fans", "thermal -table 10de2206 1"]
 
-    typer_thread = Thread(
-        target=sh.typer, args=(["temps", "fans", "thermal -table 10de2206 1"],)
-    )
+    typer_thread = Thread(target=sh.typer, args=(cmds,))
     typer_thread.start()
+
+    watchdog_thread = Thread(target=sh.watchdog, args=(45,))
+    watchdog_thread.start()
 
     running = True
     while running:
         response = sh.monitor()
+        if len(response) == 0:
+            running = False
         for line in response:
             # print(f"with {line}")
             if line.startswith("Error:"):
@@ -115,10 +132,18 @@ def sr_handler():
             else:
                 sh.typersleep(30)
 
+    print(f"closing")
     sh.finish()
     typer_thread.join()
+    watchdog_thread.join()
 
 
 if __name__ == "__main__":
+    import json
+
+    with open("sr650-xcc.json") as file:
+        sr = json.load(file)
+    # sr = {"host": "10.0.0.139", "user": "USERID", "passwd": "steamboat_mickey"}
+
     while True:
-        sr_handler()
+        sr_handler(sr["host"], sr["user"], sr["passwd"])
