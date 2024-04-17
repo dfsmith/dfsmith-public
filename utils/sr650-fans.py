@@ -5,6 +5,7 @@
 
 import paramiko
 import time
+from threading import Thread
 
 
 class ShellHandler:
@@ -17,6 +18,8 @@ class ShellHandler:
         channel = self.ssh.invoke_shell()
         self.stdin = channel.makefile("wb")
         self.stdout = channel.makefile("r")
+        self.finished = False
+        self.sleep_time = 30
 
     def __del__(self):
         self.ssh.close()
@@ -31,9 +34,35 @@ class ShellHandler:
         for cmd in cmds:
             print(f"tx <<<{cmd}>>>")
             self.stdin.write(cmd + "\n")
+            self.stdin.flush()
             time.sleep(0.5)
-        self.stdin.flush()
 
+        lines = []
+        for line in self.stdout:
+            line = line.strip("\r\n")
+            print(f"rx <<<{line}>>>")
+            lines.append(line)
+            if line == "ok" or line.startswith("Error:"):
+                break
+        return lines
+
+    def finish(self):
+        finished = True
+
+    def typersleep(self, seconds):
+        sleep_time = seconds
+
+    def typer(self, cmds):
+        while not self.finished:
+            for cmd in cmds:
+                print(f"tx <<<{cmd}>>>")
+                self.stdin.write(cmd + "\n")
+                self.stdin.flush()
+                time.sleep(0.5)
+            print(f"sleeping for {self.sleep_time}s")
+            time.sleep(self.sleep_time)
+
+    def monitor(self):
         lines = []
         for line in self.stdout:
             line = line.strip("\r\n")
@@ -45,9 +74,9 @@ class ShellHandler:
         return lines
 
 
-if __name__ == "__main__":
-    print("start")
-    sh = ShellHandler("10.0.0.139", "USERID", "SR650_7x06")
+def sr_handler():
+    print("start sr_handler")
+    sh = ShellHandler("10.0.0.139", "USERID", "mouse")
 
     crit_interval = 120
     crit_temp = {
@@ -57,11 +86,18 @@ if __name__ == "__main__":
         "PCH Temp": 60.0,
     }
 
-    sleep_time = 30
-    while True:
-        response = sh.execute(["temps", "fans", "thermal -table 10de2206 1"])
+    typer_thread = Thread(
+        target=sh.typer, args=(["temps", "fans", "thermal -table 10de2206 1"],)
+    )
+    typer_thread.start()
+
+    running = True
+    while running:
+        response = sh.monitor()
         for line in response:
             # print(f"with {line}")
+            if line.startswith("Error:"):
+                running = False
             if len(line) < 60:
                 continue
             name = line[0:17].strip()
@@ -75,7 +111,14 @@ if __name__ == "__main__":
             print(f"name: '{name}' temp/C: {temp} {'*' if name in crit_temp else ''}")
 
             if name in crit_temp and temp >= crit_temp[name]:
-                sleep_time = crit_interval
+                sh.typersleep(120)
+            else:
+                sh.typersleep(30)
 
-        print(f"sleeping for {sleep_time}s")
-        time.sleep(sleep_time)
+    sh.finish()
+    typer_thread.join()
+
+
+if __name__ == "__main__":
+    while True:
+        sr_handler()
