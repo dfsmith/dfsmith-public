@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-# Copied from
-# https://stackoverflow.com/questions/35821184/implement-an-interactive-shell-over-ssh-in-python-using-paramiko
-
 import paramiko
 import time
 from threading import Thread
@@ -10,10 +7,10 @@ from threading import Thread
 
 class ShellHandler:
 
-    def __init__(self, host, user, psw):
+    def __init__(self, host, user, passwd):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(host, username=user, password=psw, port=22)
+        self.ssh.connect(host, username=user, password=passwd, port=22)
 
         channel = self.ssh.invoke_shell()
         self.stdin = channel.makefile("wb")
@@ -21,32 +18,11 @@ class ShellHandler:
 
         self.finished = False
         self.sleep_time = 30
+        self.last_sleep_time = 30
         self.rx_watchdog = True
 
     def __del__(self):
         self.ssh.close()
-
-    def execute(self, cmds):
-        """
-        :param cmd: the command to be executed on the remote computer
-        :examples:  execute('ls')
-                    execute('finger')
-                    execute('cd folder_name')
-        """
-        for cmd in cmds:
-            print(f"tx <<<{cmd}>>>")
-            self.stdin.write(cmd + "\n")
-            self.stdin.flush()
-            time.sleep(0.5)
-
-        lines = []
-        for line in self.stdout:
-            line = line.strip("\r\n")
-            print(f"rx <<<{line}>>>")
-            lines.append(line)
-            if line == "ok" or line.startswith("Error:"):
-                break
-        return lines
 
     def finish(self):
         self.finished = True
@@ -64,12 +40,13 @@ class ShellHandler:
 
             print(f"sleeping for {self.sleep_time}s finished={self.finished}")
             if not self.finished:
+                self.last_sleep_time = self.sleep_time
                 time.sleep(self.sleep_time)
 
-    def watchdog(self, seconds):
+    def watchdog(self):
         while not self.finished:
             self.rx_watchdog = False
-            time.sleep(seconds)
+            time.sleep(1.5 * self.last_sleep_time)
             if not self.rx_watchdog:
                 print("watchdog triggered")
                 self.stdin.close()
@@ -103,7 +80,7 @@ def sr_handler(host, user, passwd):
     typer_thread = Thread(target=sh.typer, args=(cmds,))
     typer_thread.start()
 
-    watchdog_thread = Thread(target=sh.watchdog, args=(45,))
+    watchdog_thread = Thread(target=sh.watchdog)
     watchdog_thread.start()
 
     running = True
