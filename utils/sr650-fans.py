@@ -36,7 +36,7 @@ class ShellHandler:
                 print(f"tx <<<{cmd}>>>")
                 self.stdin.write(cmd + "\n")
                 self.stdin.flush()
-                time.sleep(0.5)
+                time.sleep(1.0)
 
             print(f"sleeping for {self.sleep_time}s finished={self.finished}")
             if not self.finished:
