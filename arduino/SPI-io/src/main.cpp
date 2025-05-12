@@ -64,7 +64,7 @@ void dump(size_t addr, byte *data, size_t size) {
   Serial.print(":");
   for (byte i = 0; i < size; i++) {
     Serial.print(" ");
-    if (data[0] < 16) Serial.print(0, HEX);
+    if (data[i] < 16) Serial.print(0, HEX);
     Serial.print(data[i], HEX);
   }
   Serial.println("");
@@ -226,6 +226,7 @@ void loop() {
   byte buffer[32];
   Serial.println("read 4KB");
   ee.read_status().print();
+  Serial.println("");
   for (size_t addr = 0; addr < 4096; addr += 32) {
     ee.read(addr, buffer, sizeof(buffer));
     dump(addr, buffer, sizeof(buffer));
