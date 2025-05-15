@@ -8,6 +8,10 @@
 #include <SPI.h>
 #include <Wire.h>
 
+#include "../patched.hpp"
+byte const *write_buffer = static_cast<byte const *>(patched_hpp);
+size_t write_buffer_size = sizeof(patched_hpp);
+
 struct SpiPins {
   // HSPI pins for reference
   static constexpr byte mosi = 13;
@@ -19,47 +23,22 @@ struct SpiPins {
 SPIClass spi;
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
-void testdrawchar(void) {
+void update_display(String const &str) {
   display.clearDisplay();
-  display.setTextSize(1);               // Normal 1:1 pixel scale
-  display.setTextColor(SSD1306_WHITE);  // Draw white text
-  display.setCursor(0, 0);              // Start at top-left corner
-  display.cp437(true);  // Use full 256 char 'Code Page 437' font
-
-  // Not all the characters will fit on the display. This is normal.
-  // Library will draw what it can and the rest will be clipped.
-  for (int16_t i = 0; i < 256; i++) {
-    if (i == '\n')
-      display.write(' ');
-    else
-      display.write(i);
-  }
-
-  display.display();
-  delay(2000);
-}
-
-void testdrawstyles(void) {
-  display.clearDisplay();
-
-  display.setTextSize(1);               // Normal 1:1 pixel scale
-  display.setTextColor(SSD1306_WHITE);  // Draw white text
-  display.setCursor(0, 0);              // Start at top-left corner
-  display.println(F("Hello, world!"));
-
-  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);  // Draw 'inverse' text
-  display.println(3.141592);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);  // Start at top-left corner
+  display.println(
+      F("github.com/dfsmith/dfsmith-public/tree/main/arduino/SPI-io"));
 
   display.setTextSize(2);  // Draw 2X-scale text
-  display.setTextColor(SSD1306_WHITE);
-  display.print(F("0x"));
-  display.println(0xDEADBEEF, HEX);
+  display.println(str);
 
+  display.setTextSize(1);  // Normal 1:1 pixel scale
   display.display();
-  delay(2000);
 }
 
-void dump(size_t addr, byte *data, size_t size) {
+void dump(size_t addr, byte const *data, size_t size) {
   for (int d = 12; d >= 0; d -= 4) Serial.print((addr >> d) & 0xF, HEX);
   Serial.print(":");
   for (byte i = 0; i < size; i++) {
@@ -180,12 +159,14 @@ struct Eeprom95320 {
     cs(false);
   }
 
-  void write(size_t addr, byte *data, size_t size) {
+  void write(size_t addr, byte const *data, size_t size) {
     /* Need write_en(). */
+    byte buf[size];
+    memcpy(buf, data, size);
     cs(true);
     spi.transfer(Op::WRITE);
     spi.transfer16(addr);
-    spi.transfer(data, size);
+    spi.transfer(buf, size);
     cs(false);
     while (read_status().wip) delayMicroseconds(10);
   }
@@ -206,30 +187,64 @@ struct Eeprom95320 {
 Eeprom95320 ee(spi);
 
 void setup() {
-  Serial.begin(115200);
+  int const speed = 115200;
+  Serial.begin(speed);
   Wire.begin(5, 4);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3c)) {
     Serial.println(F("SSD1306 allocation failed: halted"));
     for (;;);
   }
+  display.clearDisplay();
+  update_display("read/status/buffer/write");
+  display.println("read/status/buffer/write");
+  display.print("Serial speed: ");
+  display.println(speed);
+  display.display();
   spi.begin();
   ee.begin();
+  Serial.println("Commands: read, status, buffer, write");
 }
 
 void loop() {
+  /* Get command. */
+  Serial.print("> ");
+  String cmd;
+  do {
+    cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+  } while (cmd.isEmpty());
+  Serial.print("Got ");
+  Serial.println(cmd);
   display.clearDisplay();
-  testdrawchar();
-  testdrawstyles();
-  display.clearDisplay();
-  display.display();
+  update_display(cmd);
 
-  byte buffer[32];
-  Serial.println("read 4KB");
-  ee.read_status().print();
-  Serial.println("");
-  for (size_t addr = 0; addr < 4096; addr += 32) {
-    ee.read(addr, buffer, sizeof(buffer));
-    dump(addr, buffer, sizeof(buffer));
+  /* Execute command. */
+  if (cmd == "read") {
+    byte buffer[32];
+    Serial.println("read 4KB");
+    ee.read_status().print();
+    Serial.println("");
+    for (size_t addr = 0; addr < 4096; addr += 32) {
+      ee.read(addr, buffer, sizeof(buffer));
+      dump(addr, buffer, sizeof(buffer));
+    }
+  } else if (cmd == "status") {
+    ee.read_status().print();
+  } else if (cmd == "buffer") {
+    size_t const bs = 32;
+    for (size_t addr = 0; addr < write_buffer_size; addr += bs) {
+      auto len = write_buffer_size - addr;
+      dump(addr, write_buffer + addr, min(len, bs));
+    }
+  } else if (cmd == "write") {
+    Serial.println("Writing...");
+    size_t const bs = 32;
+    for (size_t addr = 0; addr < write_buffer_size; addr += bs) {
+      auto len = write_buffer_size - addr;
+      ee.write_en();
+      ee.write(addr, write_buffer + addr, min(len, bs));
+      dump(addr, write_buffer + addr, min(len, bs));
+    }
+    ee.write_dis();
   }
-  delay(5000);
 }
