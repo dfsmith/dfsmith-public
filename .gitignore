@@ -6,3 +6,8 @@ frys/node_modules
 *.hex
 *.elf
 .vscode/
+bin/
+lib/
+lib64
+share/
+pyvenv.cfg
