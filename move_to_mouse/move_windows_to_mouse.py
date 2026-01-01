@@ -50,6 +50,10 @@ def is_valid_window(hwnd: int) -> bool:
     desktop = win32gui.GetDesktopWindow()
     if hwnd == desktop:
         return False
+    # check for task bar
+    if hwnd == win32gui.FindWindow("Shell_TrayWnd", None):
+        print(f"Taskbar window skipped: {hwnd}")
+        return False
     style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
     if style & win32con.WS_CHILD:
         return False
@@ -74,6 +78,7 @@ def move_windows_to_monitor(target_mon: Tuple[int, int, int, int]) -> int:
         try:
             if not is_valid_window(hwnd):
                 continue
+            print(f"Moving window {hwnd}: {win32gui.GetWindowText(hwnd)}")
             rect = win32gui.GetWindowRect(hwnd)
             w = rect[2] - rect[0]
             h = rect[3] - rect[1]
