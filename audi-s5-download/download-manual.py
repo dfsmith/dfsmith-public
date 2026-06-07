@@ -3,7 +3,6 @@ import os
 import base64
 import xml.etree.ElementTree as ET
 import requests
-import cairosvg
 from pathlib import Path
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,10 +10,10 @@ from pypdf import PdfReader, PdfWriter
 from playwright.sync_api import sync_playwright
 
 # Base configuration
+OUTPUT_PDF = "Audi_S5_2010_Manual.pdf"
 BASE_URL = "https://bordbuch-online.audi.de/AudiBordbuch/docs/f03006a9-4473-4533-96b3-a5b79d405f40/files/assets/common/"
 IMG_URL_TEMPLATE = BASE_URL + "page-html5-substrates/page{:04d}_3.jpg"
 TEXT_URL_TEMPLATE = BASE_URL + "page-vectorlayers/{:04d}.svg"
-OUTPUT_PDF = "Audi_S5_2010_Manual.pdf"
 TEMP_DIR = "temp_audi_pages"
 
 # Create a clean temporary directory for downloading/converting files
@@ -23,39 +22,36 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 def clean_svg_namespaces(svg_string: str) -> str:
     """Normalize SVG namespace prefixes and emit clean SVG."""
-    #ET.register_namespace("", "http://www.w3.org/2000/svg")
-    #ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+    # ET.register_namespace("", "http://www.w3.org/2000/svg")
+    # ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
     ET.register_namespace("", "http://w3.org")
     ET.register_namespace("xlink", "http://w3.org")
     root = ET.fromstring(svg_string)
     for elem in root.iter():
         if "}" in elem.tag:
             elem.tag = elem.tag.split("}")[-1]
-
     return ET.tostring(root, encoding="utf-8").decode("utf-8")
 
 
-def composite_page(jpg_path: str, svg_path: str, output_pdf_path: str) -> None:
-    absolute_jpg = Path(jpg_path).resolve()
-    absolute_svg = Path(svg_path).resolve()
-    absolute_output = Path(output_pdf_path).resolve()
+def composite_page(jpg_path: Path, svg_path: Path, output_pdf_path: Path) -> None:
+    absolute_jpg = jpg_path.resolve()
+    absolute_svg = svg_path.resolve()
+    absolute_output = output_pdf_path.resolve()
 
-    # 1. Encode JPEG to Base64
+    # 1. Encode JPEG to Base64 for HTML embedding
     with open(absolute_jpg, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
     jpeg_data_uri = f"data:image/jpeg;base64,{encoded_string}"
 
-    # 2. Extract and Parse SVG through deep structural translation
+    # 2. Extract and Parse SVG
     with open(absolute_svg, "r", encoding="utf-8") as f:
         raw_svg_content = f.read()
-
-    # Clean the code structurally through the XML element tree
     svg_content = clean_svg_namespaces(raw_svg_content)
     root = ET.fromstring(raw_svg_content)
 
     # Read embedded dimensions (strip out 'px' text characters if present)
-    svg_width = root.get("width", "595.278px").replace("px", "")
-    svg_height = root.get("height", "421.218px").replace("px", "")
+    svg_width = root.get("width", "600px").replace("px", "")
+    svg_height = root.get("height", "422px").replace("px", "")
 
     # 3. Create the Scaffold Assembly
     html_content = f"""
@@ -122,7 +118,7 @@ def composite_page(jpg_path: str, svg_path: str, output_pdf_path: str) -> None:
         browser.close()
 
 
-def is_svg_complete(svg_path: str) -> bool:
+def is_svg_complete(svg_path: Path) -> bool:
     if not os.path.exists(svg_path):
         return False
     try:
@@ -137,15 +133,16 @@ def is_svg_complete(svg_path: str) -> bool:
     return b"<svg" in lower and b"</svg" in lower
 
 
-def is_pdf_complete(pdf_path: str) -> bool:
+def is_pdf_complete(pdf_path: Path) -> bool:
     return os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0
 
 
-def is_jpg_complete(jpg_path: str) -> bool:
+def is_jpg_complete(jpg_path: Path) -> bool:
     if not os.path.exists(jpg_path):
         return False
     try:
         with Image.open(jpg_path) as img:
+            img.verify()
             return img.format == "JPEG" and img.size[0] > 0 and img.size[1] > 0
     except Exception:
         return False
@@ -168,7 +165,7 @@ def process_page(page_number: int, force_rebuild: bool = False) -> tuple:
             if not force_rebuild and is_pdf_complete(temp_pdf_path):
                 return (page_number, True, "cached")
 
-            composite_page(str(temp_jpg_path), str(temp_svg_path), str(temp_pdf_path))
+            composite_page(temp_jpg_path, temp_svg_path, temp_pdf_path)
             return (page_number, True, "regenerated" if force_rebuild else "created")
 
         jpg_response = requests.get(img_url, timeout=10)
@@ -214,7 +211,7 @@ def main() -> None:
     consecutive_failures = 0
     MAX_WORKERS = 8
 
-    print("Starting compilation of Audi Digital Manual (8 parallel downloads)...")
+    print(f"Starting compilation of Audi Manual ({MAX_WORKERS} download workers)")
 
     # Submit tasks for parallel processing
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -223,6 +220,7 @@ def main() -> None:
         lookahead = MAX_WORKERS * 2  # Submit pages ahead of time
         next_page_to_submit = page_number
         highest_written = 0
+        max_failures = 3
 
         # Keep submitting and collecting until we hit consecutive failures threshold
         while True:
@@ -254,8 +252,8 @@ def main() -> None:
                     formatted_page = f"{pn:04d}"
                     temp_pdf_path = os.path.join(TEMP_DIR, f"{formatted_page}.pdf")
 
+                    print(f"Page {formatted_page}... ({status})")
                     if success:
-                        print(f"Page {formatted_page}... ({status})")
                         try:
                             reader = PdfReader(temp_pdf_path)
                             writer.append(reader)
@@ -265,18 +263,12 @@ def main() -> None:
                             print(f"Failed to append {formatted_page}: {e}")
                             consecutive_failures += 1
                     else:
-                        print(f"Page {formatted_page}... {status}")
-                        # Treat consecutive 404s or errors as termination condition
-                        if status == "404":
-                            consecutive_failures += 1
-                        else:
-                            consecutive_failures += 1
+                        consecutive_failures += 1
 
                     highest_written = pn
 
-                    if consecutive_failures >= 3:
-                        print("Stopping due to 3 consecutive missing/failed pages")
-                        # cancel any remaining futures
+                    if consecutive_failures >= max_failures:
+                        print(f"Stopping due to {max_failures} consecutive missing/failed pages")
                         for f in pending_futures:
                             f.cancel()
                         pending_futures.clear()
@@ -287,23 +279,17 @@ def main() -> None:
                     break
 
             # If we've reached the termination condition, stop submitting
-            if consecutive_failures >= 3:
+            if consecutive_failures >= max_failures:
                 break
 
-    # Merge independent page elements into the final document
+    # Save final document
     if pages_fetched > 0:
-        print(
-            f"\nStitching all individual vector layers together into: {OUTPUT_PDF}..."
-        )
+        print(f"Downloaded and temporary PDF files preserved in {TEMP_DIR}.")
+        print(f"Saving pages into: {OUTPUT_PDF}")
         with open(OUTPUT_PDF, "wb") as output_pdf:
             writer.write(output_pdf)
-
-        # Keep temporary workspace files for resume capability on future runs
-        print(f"Temporary files preserved in {TEMP_DIR} for resume capability.")
-
-        print("\nSuccess! Your complete manual has been downloaded and compiled.")
     else:
-        print("\nCompilation failed: No valid page layers could be fetched.")
+        print("No valid pages found.")
 
 
 if __name__ == "__main__":
