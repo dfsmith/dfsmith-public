@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""
-Move all top-level windows to the monitor containing the mouse cursor.
-Also supports installing/uninstalling a Desktop background context-menu item
-that launches this script.
+"""Move windows to the monitor containing the mouse cursor.
 
-Usage:
+Example:
   python move_windows_to_mouse.py            # run action
-  python move_windows_to_mouse.py install    # add context-menu (HKCU)
-  python move_windows_to_mouse.py uninstall  # remove context-menu
+  python move_windows_to_mouse.py install    # add Windows context menu entry
+  python move_windows_to_mouse.py uninstall  # remove context menu entry
 
-Note: Requires pywin32. Use `pip install -r requirements.txt`.
+Install dependencies:
+  pip install -r requirements.txt
 """
 import argparse
 import ctypes
@@ -18,7 +16,6 @@ import os
 import re
 import sys
 from ctypes import wintypes
-from typing import Tuple, List
 
 try:
     import win32gui
@@ -91,13 +88,14 @@ class _DISPLAY_DEVICEW(ctypes.Structure):
     ]
 
 
-def get_monitor_rect_from_point(pt: Tuple[int, int]) -> Tuple[int, int, int, int]:
+def get_monitor_rect_from_point(pt: tuple[int, int]) -> tuple[int, int, int, int]:
     hmon = win32api.MonitorFromPoint(pt)
     info = win32api.GetMonitorInfo(hmon)
-    return tuple(info["Monitor"])
+    monitor = info["Monitor"]
+    return (monitor[0], monitor[1], monitor[2], monitor[3])
 
 
-def enum_top_level_windows() -> List[int]:
+def enum_top_level_windows() -> list[int]:
     hwnds = []
 
     def _cb(hwnd, extra):
@@ -129,12 +127,12 @@ def is_valid_window(hwnd: int) -> bool:
     return True
 
 
-def rect_center(rect: Tuple[int, int, int, int]) -> Tuple[float, float]:
+def rect_center(rect: tuple[int, int, int, int]) -> tuple[float, float]:
     l, t, r, b = rect
     return ((l + r) / 2.0, (t + b) / 2.0)
 
 
-def move_windows_to_monitor(target_mon: Tuple[int, int, int, int], verbose: bool = False) -> int:
+def move_windows_to_monitor(target_mon: tuple[int, int, int, int], verbose: bool = False) -> int:
     hwnds = enum_top_level_windows()
     moved = 0
     for hwnd in hwnds:
@@ -150,7 +148,8 @@ def move_windows_to_monitor(target_mon: Tuple[int, int, int, int], verbose: bool
 
             cur_mon = win32api.MonitorFromPoint((int(center[0]), int(center[1])))
             cur_info = win32api.GetMonitorInfo(cur_mon)
-            cur_rect = tuple(cur_info["Monitor"])
+            cur_monitor = cur_info["Monitor"]
+            cur_rect = (cur_monitor[0], cur_monitor[1], cur_monitor[2], cur_monitor[3])
 
             rel_x = center[0] - cur_rect[0]
             rel_y = center[1] - cur_rect[1]
@@ -181,12 +180,7 @@ def move_windows_to_monitor(target_mon: Tuple[int, int, int, int], verbose: bool
     return moved
 
 
-def set_primary_monitor(target_rect: Tuple[int, int, int, int]) -> None:
-    """
-    Make the monitor at *target_rect* the Windows primary display by shifting
-    all display positions so that target_rect's top-left becomes (0, 0).
-    Windows then automatically moves the taskbar to the new primary monitor.
-    """
+def set_primary_monitor(target_rect: tuple[int, int, int, int]) -> None:
     shift_x = target_rect[0]
     shift_y = target_rect[1]
     if shift_x == 0 and shift_y == 0:
@@ -229,8 +223,7 @@ def set_primary_monitor(target_rect: Tuple[int, int, int, int]) -> None:
 # Audio: switch default playback device to the selected monitor's adapter
 # --------------------------------------------------------------------------- #
 
-def _get_monitor_device_name(target_rect: Tuple[int, int, int, int]) -> str:
-    """Return the display device path (e.g. '\\\\.\\DISPLAY1') for the monitor."""
+def _get_monitor_device_name(target_rect: tuple[int, int, int, int]) -> str:
     hmon = win32api.MonitorFromPoint((target_rect[0], target_rect[1]))
     info = win32api.GetMonitorInfo(hmon)
     return info.get("Device", "").strip("\x00")
@@ -251,84 +244,30 @@ def _get_adapter_string(device_name: str) -> str:
     return ""
 
 
-def _get_monitor_registry_name(device_key: str) -> str:
-    if not device_key:
-        return ""
-
-    key_path = device_key.rstrip("\x00").strip()
-    for prefix in (r"\\Registry\\Machine\\", r"\\Registry\\Machine\\"):
-        if key_path.startswith(prefix):
-            key_path = key_path[len(prefix):]
-            break
-
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            for value_name in ("FriendlyName", "DeviceDesc", "Mfg"):
-                try:
-                    value, _ = winreg.QueryValueEx(key, value_name)
-                except OSError:
-                    continue
-                if isinstance(value, str) and value:
-                    return value
-    except OSError:
-        pass
-
-    # Some monitor keys store the friendly name under Device Parameters.
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path + r"\Device Parameters") as key:
-            for value_name in ("FriendlyName", "DeviceDesc", "Mfg"):
-                try:
-                    value, _ = winreg.QueryValueEx(key, value_name)
-                except OSError:
-                    continue
-                if isinstance(value, str) and value:
-                    return value
-    except OSError:
-        pass
-
-    return ""
-
-
-def _parse_monitor_device_id(device_id: str) -> str:
-    if not device_id:
-        return ""
-    try:
-        parts = device_id.rstrip("\x00").split("\\")
-    except Exception:
-        return ""
-    if len(parts) >= 2 and parts[0].upper() == "MONITOR":
-        return parts[1]
-    return ""
-
-
-def _decode_wmi_string(value) -> str:
-    if not value:
-        return ""
-    if isinstance(value, (list, tuple)):
-        return "".join(chr(x) for x in value if x and x < 0x110000).strip()
-    return str(value).strip()
-
-
 def _get_monitor_wmi_name(device_id: str) -> str:
-    parsed_id = _parse_monitor_device_id(device_id)
-    if not parsed_id:
+    parts = (device_id or "").rstrip("\x00").split("\\")
+    if len(parts) < 2 or parts[0].upper() != "MONITOR":
         return ""
+    monitor_id = parts[1]
+
+    def decode(value):
+        if not value:
+            return ""
+        if isinstance(value, (list, tuple)):
+            return "".join(chr(x) for x in value if x and x < 0x110000).strip()
+        return str(value).strip()
 
     try:
         import win32com.client
         locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
         svc = locator.ConnectServer('.', 'root\\wmi')
-        query = f"SELECT InstanceName, UserFriendlyName, ManufacturerName FROM WmiMonitorID"
-        for item in svc.ExecQuery(query):
-            instance = str(getattr(item, 'InstanceName', '') or '')
-            if parsed_id.lower() not in instance.lower():
+        for item in svc.ExecQuery("SELECT InstanceName, UserFriendlyName, ManufacturerName FROM WmiMonitorID"):
+            if monitor_id.lower() not in str(getattr(item, 'InstanceName', '') or '').lower():
                 continue
-            name = _decode_wmi_string(getattr(item, 'UserFriendlyName', None))
-            if name and name.lower() != 'generic pnp monitor':
-                return name
-            manufacturer = _decode_wmi_string(getattr(item, 'ManufacturerName', None))
-            if manufacturer:
-                return manufacturer
+            for attr in ("UserFriendlyName", "ManufacturerName"):
+                value = decode(getattr(item, attr, None))
+                if value and value.lower() != "generic pnp monitor":
+                    return value
     except Exception:
         pass
 
@@ -336,22 +275,21 @@ def _get_monitor_wmi_name(device_id: str) -> str:
         import win32com.client
         locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
         svc = locator.ConnectServer('.', 'root\\cimv2')
-        sanitized = parsed_id.replace("'", "''")
-        query = f"SELECT Name, Description FROM Win32_DesktopMonitor WHERE PNPDeviceID LIKE '%{sanitized}%'"
-        for item in svc.ExecQuery(query):
-            name = str(getattr(item, 'Name', '') or '').strip()
-            if name and name.lower() != 'generic pnp monitor':
-                return name
-            desc = str(getattr(item, 'Description', '') or '').strip()
-            if desc and desc.lower() != 'generic pnp monitor':
-                return desc
+        sanitized = monitor_id.replace("'", "''")
+        for item in svc.ExecQuery(
+            f"SELECT Name, Description FROM Win32_DesktopMonitor WHERE PNPDeviceID LIKE '%{sanitized}%'"
+        ):
+            for attr in ("Name", "Description"):
+                value = str(getattr(item, attr, '') or '').strip()
+                if value and value.lower() != "generic pnp monitor":
+                    return value
     except Exception:
         pass
 
     return ""
 
 
-def _get_monitor_friendly_name(target_rect: Tuple[int, int, int, int]) -> str:
+def _get_monitor_friendly_name(target_rect: tuple[int, int, int, int]) -> str:
     device_name = _get_monitor_device_name(target_rect)
     if not device_name:
         return ""
@@ -365,27 +303,17 @@ def _get_monitor_friendly_name(target_rect: Tuple[int, int, int, int]) -> str:
             break
 
         name = dd.DeviceString.rstrip("\x00").strip()
-        device_key = dd.DeviceKey.rstrip("\x00").strip()
-        device_id = dd.DeviceID.rstrip("\x00").strip()
-
         if name and name.lower() != "generic pnp monitor":
             return name
-        registry_name = _get_monitor_registry_name(device_key)
-        if registry_name and registry_name.lower() != "generic pnp monitor":
-            return registry_name
-        wmi_name = _get_monitor_wmi_name(device_id)
+        wmi_name = _get_monitor_wmi_name(dd.DeviceID.rstrip("\x00").strip())
         if wmi_name and wmi_name.lower() != "generic pnp monitor":
             return wmi_name
-        parsed_id = _parse_monitor_device_id(device_id)
-        if parsed_id:
-            return parsed_id
-
         i += 1
 
     return ""
 
 
-def get_monitor_name(target_rect: Tuple[int, int, int, int]) -> str:
+def get_monitor_name(target_rect: tuple[int, int, int, int]) -> str:
     monitor_name = _get_monitor_friendly_name(target_rect)
     device_name = _get_monitor_device_name(target_rect)
     adapter = _get_adapter_string(device_name)
@@ -443,11 +371,12 @@ def _set_default_audio_device(device_id: str) -> None:
         clsctx=comtypes.CLSCTX_ALL,
     )
     # Apply for all three roles: eConsole=0, eMultimedia=1, eCommunications=2
+    set_default = getattr(policy, "SetDefaultEndpoint")
     for role in range(3):
-        policy.SetDefaultEndpoint(device_id, role)
+        set_default(device_id, role)
 
 
-def set_default_audio_for_monitor(target_rect: Tuple[int, int, int, int], debug: bool = False) -> bool:
+def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug: bool = False) -> bool:
     """
     Switch the Windows default audio output to the endpoint associated with
     the display adapter driving the monitor at *target_rect*.
@@ -476,7 +405,6 @@ def set_default_audio_for_monitor(target_rect: Tuple[int, int, int, int], debug:
         return False
 
     monitor_name = get_monitor_name(target_rect)
-    device_name = _get_monitor_device_name(target_rect)
     adapter_words = [w for w in adapter.split() if len(w) > 3]
 
     def normalize(text: str) -> str:
@@ -484,18 +412,15 @@ def set_default_audio_for_monitor(target_rect: Tuple[int, int, int, int], debug:
         text = re.sub(r"[^a-z0-9]+", " ", text)
         return " ".join(text.split())
 
-    def token_set(text: str) -> set[str]:
-        return set(normalize(text).split())
-
     monitor_norm = normalize(monitor_name)
-    monitor_tokens = token_set(monitor_name)
-    adapter_tokens = token_set(adapter)
+    monitor_tokens = set(monitor_norm.split())
+    adapter_tokens = set(normalize(adapter).split())
 
     scored = []
     for ep in endpoints:
         fname = ep.FriendlyName or ""
         fname_norm = normalize(fname)
-        fname_tokens = token_set(fname)
+        fname_tokens = set(fname_norm.split())
 
         monitor_score = 0.0
         if monitor_norm and monitor_norm in fname_norm:
@@ -604,18 +529,31 @@ def uninstall_context_menu(key_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Move windows to the monitor containing the mouse cursor.")
-    parser.add_argument("cmd", nargs="?", choices=["install", "register", "uninstall", "remove"], help="Install or uninstall desktop context-menu entry.")
+    parser = argparse.ArgumentParser(
+        description="Move windows to the monitor containing the mouse cursor.",
+        epilog=(
+            "Commands:\n"
+            "  install   Add the script to the desktop background context menu.\n"
+            "  uninstall Remove the context menu entry.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "cmd",
+        nargs="?",
+        choices=["install", "uninstall"],
+        help="Install or uninstall the desktop context-menu entry.",
+    )
     parser.add_argument("--debug-audio", action="store_true", help="Print audio endpoint scoring.")
     parser.add_argument("--verbose-windows", action="store_true", help="Print detailed window move output.")
     args = parser.parse_args()
 
     key_path = r"Software\Classes\Directory\Background\shell\MoveWindowsToMouse"
-    if args.cmd in ("install", "register"):
+    if args.cmd == "install":
         script_path = os.path.abspath(sys.argv[0])
         install_context_menu(key_path, script_path)
         return
-    if args.cmd in ("uninstall", "remove"):
+    if args.cmd == "uninstall":
         uninstall_context_menu(key_path)
         return
 
@@ -631,7 +569,6 @@ def main():
     shift_x, shift_y = target[0], target[1]
     set_primary_monitor(target)
 
-    # Adjust target rect to post-shift coordinates (target is now at origin).
     if shift_x != 0 or shift_y != 0:
         target = (
             target[0] - shift_x,
@@ -641,17 +578,6 @@ def main():
         )
 
     moved = move_windows_to_monitor(target, verbose=args.verbose_windows)
-
-    # Adjust target rect to post-shift coordinates (target is now at origin).
-    if shift_x != 0 or shift_y != 0:
-        target = (
-            target[0] - shift_x,
-            target[1] - shift_y,
-            target[2] - shift_x,
-            target[3] - shift_y,
-        )
-
-    moved = move_windows_to_monitor(target)
     print(f"Moved {moved} windows to monitor at {target}.")
 
 
