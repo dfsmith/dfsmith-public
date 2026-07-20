@@ -11,8 +11,10 @@ Usage:
 
 Note: Requires pywin32. Use `pip install -r requirements.txt`.
 """
+import ctypes
 import os
 import sys
+from ctypes import wintypes
 from typing import Tuple, List
 
 try:
@@ -23,6 +25,67 @@ try:
 except Exception:
     print("Missing dependency: pywin32. Install with: pip install pywin32")
     raise
+
+# --------------------------------------------------------------------------- #
+# ctypes structures for ChangeDisplaySettingsEx (primary monitor switching)
+# --------------------------------------------------------------------------- #
+_ENUM_CURRENT_SETTINGS = -1
+_CDS_UPDATEREGISTRY = 0x00000001
+_CDS_NORESET = 0x10000000
+_DM_POSITION = 0x00000020
+_DISPLAY_DEVICE_ACTIVE = 0x00000001
+
+
+class _POINTL(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+class _DEVMODEW(ctypes.Structure):
+    """DEVMODEW layout for display-device usage (display-device path through the union)."""
+    _fields_ = [
+        ("dmDeviceName",        ctypes.c_wchar * 32),   # 64 B
+        ("dmSpecVersion",       wintypes.WORD),
+        ("dmDriverVersion",     wintypes.WORD),
+        ("dmSize",              wintypes.WORD),
+        ("dmDriverExtra",       wintypes.WORD),
+        ("dmFields",            wintypes.DWORD),         # offset 72
+        # display-device union (16 B, same size as 8 printer SHORTs):
+        ("dmPosition",          _POINTL),                # offset 76
+        ("dmDisplayOrientation", wintypes.DWORD),
+        ("dmDisplayFixedOutput", wintypes.DWORD),
+        # shared fields:
+        ("dmColor",             wintypes.SHORT),
+        ("dmDuplex",            wintypes.SHORT),
+        ("dmYResolution",       wintypes.SHORT),
+        ("dmTTOption",          wintypes.SHORT),
+        ("dmCollate",           wintypes.SHORT),
+        ("dmFormName",          ctypes.c_wchar * 32),    # 64 B
+        ("dmLogPixels",         wintypes.WORD),
+        ("dmBitsPerPel",        wintypes.DWORD),
+        ("dmPelsWidth",         wintypes.DWORD),
+        ("dmPelsHeight",        wintypes.DWORD),
+        ("dmDisplayFlags",      wintypes.DWORD),
+        ("dmDisplayFrequency",  wintypes.DWORD),
+        ("dmICMMethod",         wintypes.DWORD),
+        ("dmICMIntent",         wintypes.DWORD),
+        ("dmMediaType",         wintypes.DWORD),
+        ("dmDitherType",        wintypes.DWORD),
+        ("dmReserved1",         wintypes.DWORD),
+        ("dmReserved2",         wintypes.DWORD),
+        ("dmPanningWidth",      wintypes.DWORD),
+        ("dmPanningHeight",     wintypes.DWORD),         # total 220 B
+    ]
+
+
+class _DISPLAY_DEVICEW(ctypes.Structure):
+    _fields_ = [
+        ("cb",           wintypes.DWORD),
+        ("DeviceName",   ctypes.c_wchar * 32),
+        ("DeviceString", ctypes.c_wchar * 128),
+        ("StateFlags",   wintypes.DWORD),
+        ("DeviceID",     ctypes.c_wchar * 128),
+        ("DeviceKey",    ctypes.c_wchar * 128),
+    ]
 
 
 def get_monitor_rect_from_point(pt: Tuple[int, int]) -> Tuple[int, int, int, int]:
@@ -42,24 +105,21 @@ def enum_top_level_windows() -> List[int]:
     return hwnds
 
 
+_TASKBAR_CLASSES = frozenset({"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Button", "Progman"})
+
+
 def is_valid_window(hwnd: int) -> bool:
     if not win32gui.IsWindowVisible(hwnd):
         return False
     if win32gui.IsIconic(hwnd):
         return False
-    desktop = win32gui.GetDesktopWindow()
-    if hwnd == desktop:
-        return False
-    # check for task bar
-    if hwnd == win32gui.FindWindow("Shell_TrayWnd", None):
-        print(f"Taskbar window skipped: {hwnd}")
+    if hwnd == win32gui.GetDesktopWindow():
         return False
     style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
     if style & win32con.WS_CHILD:
         return False
     try:
-        cls = win32gui.GetClassName(hwnd)
-        if cls in ("Shell_TrayWnd", "Button", "Progman"):
+        if win32gui.GetClassName(hwnd) in _TASKBAR_CLASSES:
             return False
     except Exception:
         pass
@@ -117,6 +177,178 @@ def move_windows_to_monitor(target_mon: Tuple[int, int, int, int]) -> int:
     return moved
 
 
+def set_primary_monitor(target_rect: Tuple[int, int, int, int]) -> None:
+    """
+    Make the monitor at *target_rect* the Windows primary display by shifting
+    all display positions so that target_rect's top-left becomes (0, 0).
+    Windows then automatically moves the taskbar to the new primary monitor.
+    """
+    shift_x = target_rect[0]
+    shift_y = target_rect[1]
+    if shift_x == 0 and shift_y == 0:
+        return  # already primary
+
+    user32 = ctypes.windll.user32
+    i = 0
+    while True:
+        dd = _DISPLAY_DEVICEW()
+        dd.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
+        if not user32.EnumDisplayDevicesW(None, i, ctypes.byref(dd), 0):
+            break
+        i += 1
+        if not (dd.StateFlags & _DISPLAY_DEVICE_ACTIVE):
+            continue
+
+        dm = _DEVMODEW()
+        dm.dmSize = ctypes.sizeof(_DEVMODEW)
+        if not user32.EnumDisplaySettingsW(dd.DeviceName, _ENUM_CURRENT_SETTINGS, ctypes.byref(dm)):
+            continue
+
+        dm.dmPosition.x -= shift_x
+        dm.dmPosition.y -= shift_y
+        dm.dmFields |= _DM_POSITION
+
+        user32.ChangeDisplaySettingsExW(
+            dd.DeviceName,
+            ctypes.byref(dm),
+            None,
+            _CDS_UPDATEREGISTRY | _CDS_NORESET,
+            None,
+        )
+
+    # Apply all queued changes at once.
+    user32.ChangeDisplaySettingsExW(None, None, None, 0, None)
+    print(f"Primary display set to monitor at {target_rect}.")
+
+
+# --------------------------------------------------------------------------- #
+# Audio: switch default playback device to the selected monitor's adapter
+# --------------------------------------------------------------------------- #
+
+def _get_monitor_device_name(target_rect: Tuple[int, int, int, int]) -> str:
+    """Return the display device path (e.g. '\\\\.\\DISPLAY1') for the monitor."""
+    hmon = win32api.MonitorFromPoint((target_rect[0], target_rect[1]))
+    info = win32api.GetMonitorInfo(hmon)
+    return info.get("Device", "").strip("\x00")
+
+
+def _get_adapter_string(device_name: str) -> str:
+    """Return the adapter description (e.g. 'NVIDIA GeForce RTX 4090') for a device path."""
+    user32 = ctypes.windll.user32
+    i = 0
+    while True:
+        dd = _DISPLAY_DEVICEW()
+        dd.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
+        if not user32.EnumDisplayDevicesW(None, i, ctypes.byref(dd), 0):
+            break
+        i += 1
+        if dd.DeviceName.rstrip("\x00").strip() == device_name.strip():
+            return dd.DeviceString.rstrip("\x00").strip()
+    return ""
+
+
+def _set_default_audio_device(device_id: str) -> None:
+    """
+    Set the Windows default audio playback endpoint via the undocumented
+    IPolicyConfig COM interface (works on Vista through Windows 11).
+    """
+    try:
+        import comtypes
+        import comtypes.client  # noqa: F401  (ensures COM runtime is initialised)
+    except ImportError:
+        raise ImportError("comtypes is required – install pycaw: pip install pycaw")
+
+    # IPolicyConfig – undocumented COM interface present in AudioSes.dll.
+    # CLSID: {870AF99C-171D-4F9E-AF0D-E63DF40C2BC9}
+    # IID:   {F8679F50-850A-41CF-9C72-430F290290C8}
+    class _IPolicyConfig(comtypes.IUnknown):
+        _iid_ = comtypes.GUID("{F8679F50-850A-41CF-9C72-430F290290C8}")
+        _methods_ = [
+            # placeholder entries keep the vtable indices correct:
+            comtypes.STDMETHOD(comtypes.HRESULT, "GetMixFormat"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "GetDeviceFormat"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "ResetDeviceFormat"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "SetDeviceFormat"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "GetProcessingPeriod"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "SetProcessingPeriod"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "GetShareMode"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "SetShareMode"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "GetPropertyValue"),
+            comtypes.STDMETHOD(comtypes.HRESULT, "SetPropertyValue"),
+            comtypes.STDMETHOD(
+                comtypes.HRESULT, "SetDefaultEndpoint",
+                ctypes.c_wchar_p, ctypes.c_uint,
+            ),
+            comtypes.STDMETHOD(comtypes.HRESULT, "SetEndpointVisibility"),
+        ]
+
+    policy = comtypes.CoCreateInstance(
+        comtypes.GUID("{870AF99C-171D-4F9E-AF0D-E63DF40C2BC9}"),
+        interface=_IPolicyConfig,
+        clsctx=comtypes.CLSCTX_ALL,
+    )
+    # Apply for all three roles: eConsole=0, eMultimedia=1, eCommunications=2
+    for role in range(3):
+        policy.SetDefaultEndpoint(device_id, role)
+
+
+def set_default_audio_for_monitor(target_rect: Tuple[int, int, int, int]) -> bool:
+    """
+    Switch the Windows default audio output to the endpoint associated with
+    the display adapter driving the monitor at *target_rect*.
+
+    Matching is done by looking for an audio endpoint whose friendly name
+    contains a distinctive word from the adapter description (e.g. "NVIDIA").
+
+    Returns True if a device was found and set.
+    """
+    try:
+        from pycaw.pycaw import AudioUtilities
+    except ImportError:
+        print("pycaw not installed; skipping audio switch. Run: pip install pycaw")
+        return False
+
+    device_name = _get_monitor_device_name(target_rect)
+    adapter = _get_adapter_string(device_name)
+    if not adapter:
+        print(f"Could not identify display adapter for monitor at {target_rect}.")
+        return False
+
+    try:
+        endpoints = AudioUtilities.GetAllDevices()
+    except Exception as exc:
+        print(f"Failed to enumerate audio devices: {exc}")
+        return False
+
+    # Match by words longer than 3 chars from the adapter name (e.g. "NVIDIA", "Intel").
+    adapter_words = [w for w in adapter.split() if len(w) > 3]
+    best = None
+    for ep in endpoints:
+        fname = ep.FriendlyName or ""
+        for word in adapter_words:
+            if word.lower() in fname.lower():
+                best = ep
+                break
+        if best:
+            break
+
+    if best is None:
+        available = [ep.FriendlyName for ep in endpoints]
+        print(
+            f"No audio endpoint matched adapter '{adapter}'. "
+            f"Available: {available}"
+        )
+        return False
+
+    try:
+        _set_default_audio_device(best.id)
+        print(f"Default audio output → {best.FriendlyName}")
+        return True
+    except Exception as exc:
+        print(f"Failed to set default audio device: {exc}")
+        return False
+
+
 def install_context_menu(key_path: str, script_path: str):
     cmd_key_path = key_path + r"\command"
     try:
@@ -170,6 +402,23 @@ def main():
 
     pt = win32api.GetCursorPos()
     target = get_monitor_rect_from_point(pt)
+
+    # Switch audio output before the coordinate system shifts.
+    set_default_audio_for_monitor(target)
+
+    # Make the target monitor primary (shifts all display coordinates).
+    shift_x, shift_y = target[0], target[1]
+    set_primary_monitor(target)
+
+    # Adjust target rect to post-shift coordinates (target is now at origin).
+    if shift_x != 0 or shift_y != 0:
+        target = (
+            target[0] - shift_x,
+            target[1] - shift_y,
+            target[2] - shift_x,
+            target[3] - shift_y,
+        )
+
     moved = move_windows_to_monitor(target)
     print(f"Moved {moved} windows to monitor at {target}.")
 
