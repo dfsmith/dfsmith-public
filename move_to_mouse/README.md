@@ -5,7 +5,7 @@ Small Python utility that moves all top-level windows to the monitor containing 
 Prerequisites
 - Windows 10/11
 - Python 3.8+
-- Install dependency: `pip install -r requirements.txt`
+- Install dependency: `python -m pip install -r requirements.txt`
 
 Usage
 - Run once from a console:
