@@ -11,6 +11,7 @@ dependencies = [
     "cairocffi>=1.7.1",
     "pycairo>=1.25.0",
     "pywin32>=311",
+    "comtypes>=1.2.0",
     "pycaw>=20251023"
 ]
 

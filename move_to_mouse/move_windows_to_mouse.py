@@ -27,65 +27,113 @@ except Exception:
     raise
 
 # --------------------------------------------------------------------------- #
-# ctypes structures for ChangeDisplaySettingsEx (primary monitor switching)
+# ctypes structures for SetDisplayConfig / QueryDisplayConfig (CCD API)
 # --------------------------------------------------------------------------- #
-_ENUM_CURRENT_SETTINGS = -1
-_CDS_UPDATEREGISTRY = 0x00000001
-_CDS_NORESET = 0x10000000
-_DM_POSITION = 0x00000020
-_DISPLAY_DEVICE_ACTIVE = 0x00000001
+_QDC_ONLY_ACTIVE_PATHS           = 0x00000002
+_SDC_USE_SUPPLIED_DISPLAY_CONFIG = 0x00000020
+_SDC_APPLY                       = 0x00000080
+_SDC_NO_OPTIMIZATION             = 0x00000100
+_SDC_SAVE_TO_DATABASE            = 0x00000200
+_SDC_ALLOW_CHANGES               = 0x00000400
+_DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE = 1
 
 
 class _POINTL(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
-class _DEVMODEW(ctypes.Structure):
-    """DEVMODEW layout for display-device usage (display-device path through the union)."""
+class _DISPLAYCONFIG_RATIONAL(ctypes.Structure):
+    _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_2DREGION(ctypes.Structure):
+    _fields_ = [("cx", wintypes.UINT), ("cy", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_VIDEO_SIGNAL_INFO(ctypes.Structure):
     _fields_ = [
-        ("dmDeviceName",        ctypes.c_wchar * 32),   # 64 B
-        ("dmSpecVersion",       wintypes.WORD),
-        ("dmDriverVersion",     wintypes.WORD),
-        ("dmSize",              wintypes.WORD),
-        ("dmDriverExtra",       wintypes.WORD),
-        ("dmFields",            wintypes.DWORD),         # offset 72
-        # display-device union (16 B, same size as 8 printer SHORTs):
-        ("dmPosition",          _POINTL),                # offset 76
-        ("dmDisplayOrientation", wintypes.DWORD),
-        ("dmDisplayFixedOutput", wintypes.DWORD),
-        # shared fields:
-        ("dmColor",             wintypes.SHORT),
-        ("dmDuplex",            wintypes.SHORT),
-        ("dmYResolution",       wintypes.SHORT),
-        ("dmTTOption",          wintypes.SHORT),
-        ("dmCollate",           wintypes.SHORT),
-        ("dmFormName",          ctypes.c_wchar * 32),    # 64 B
-        ("dmLogPixels",         wintypes.WORD),
-        ("dmBitsPerPel",        wintypes.DWORD),
-        ("dmPelsWidth",         wintypes.DWORD),
-        ("dmPelsHeight",        wintypes.DWORD),
-        ("dmDisplayFlags",      wintypes.DWORD),
-        ("dmDisplayFrequency",  wintypes.DWORD),
-        ("dmICMMethod",         wintypes.DWORD),
-        ("dmICMIntent",         wintypes.DWORD),
-        ("dmMediaType",         wintypes.DWORD),
-        ("dmDitherType",        wintypes.DWORD),
-        ("dmReserved1",         wintypes.DWORD),
-        ("dmReserved2",         wintypes.DWORD),
-        ("dmPanningWidth",      wintypes.DWORD),
-        ("dmPanningHeight",     wintypes.DWORD),         # total 220 B
+        ("pixelRate",        ctypes.c_uint64),
+        ("hSyncFreq",        _DISPLAYCONFIG_RATIONAL),
+        ("vSyncFreq",        _DISPLAYCONFIG_RATIONAL),
+        ("activeSize",       _DISPLAYCONFIG_2DREGION),
+        ("totalSize",        _DISPLAYCONFIG_2DREGION),
+        ("videoStandard",    wintypes.UINT),   # union simplified to UINT (22 bits used)
+        ("scanLineOrdering", wintypes.UINT),
+    ]  # 48 bytes
+
+
+class _DISPLAYCONFIG_TARGET_MODE(ctypes.Structure):
+    _fields_ = [("targetVideoSignalInfo", _DISPLAYCONFIG_VIDEO_SIGNAL_INFO)]
+
+
+class _DISPLAYCONFIG_SOURCE_MODE(ctypes.Structure):
+    _fields_ = [
+        ("width",       wintypes.UINT),
+        ("height",      wintypes.UINT),
+        ("pixelFormat", wintypes.UINT),
+        ("position",    _POINTL),
     ]
 
 
-class _DISPLAY_DEVICEW(ctypes.Structure):
+class _DISPLAYCONFIG_DESKTOP_IMAGE_INFO(ctypes.Structure):
     _fields_ = [
-        ("cb",           wintypes.DWORD),
-        ("DeviceName",   ctypes.c_wchar * 32),
-        ("DeviceString", ctypes.c_wchar * 128),
-        ("StateFlags",   wintypes.DWORD),
-        ("DeviceID",     ctypes.c_wchar * 128),
-        ("DeviceKey",    ctypes.c_wchar * 128),
+        ("PathSourceSize",     _POINTL),
+        ("DesktopImageRegion", wintypes.RECT),
+        ("DesktopImageClip",   wintypes.RECT),
     ]
+
+
+class _DISPLAYCONFIG_MODE_INFO_UNION(ctypes.Union):
+    _fields_ = [
+        ("targetMode",      _DISPLAYCONFIG_TARGET_MODE),
+        ("sourceMode",      _DISPLAYCONFIG_SOURCE_MODE),
+        ("desktopImageInfo", _DISPLAYCONFIG_DESKTOP_IMAGE_INFO),
+    ]
+
+
+class _DISPLAYCONFIG_MODE_INFO(ctypes.Structure):
+    _anonymous_ = ("_u",)
+    _fields_ = [
+        ("infoType",  wintypes.UINT),
+        ("id",        wintypes.UINT),
+        ("adapterId", ctypes.c_uint64),   # LUID fits in a uint64
+        ("_u",        _DISPLAYCONFIG_MODE_INFO_UNION),
+    ]
+
+
+class _DISPLAYCONFIG_PATH_SOURCE_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId",   ctypes.c_uint64),
+        ("id",          wintypes.UINT),
+        ("modeInfoIdx", wintypes.UINT),
+        ("statusFlags", wintypes.UINT),
+    ]
+
+
+class _DISPLAYCONFIG_PATH_TARGET_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId",        ctypes.c_uint64),
+        ("id",               wintypes.UINT),
+        ("modeInfoIdx",      wintypes.UINT),
+        ("outputTechnology", wintypes.UINT),
+        ("rotation",         wintypes.UINT),
+        ("scaling",          wintypes.UINT),
+        ("refreshRate",      _DISPLAYCONFIG_RATIONAL),
+        ("scanLineOrdering", wintypes.UINT),
+        ("targetAvailable",  wintypes.BOOL),
+        ("statusFlags",      wintypes.UINT),
+    ]
+
+
+class _DISPLAYCONFIG_PATH_INFO(ctypes.Structure):
+    _fields_ = [
+        ("sourceInfo", _DISPLAYCONFIG_PATH_SOURCE_INFO),
+        ("targetInfo", _DISPLAYCONFIG_PATH_TARGET_INFO),
+        ("flags",      wintypes.UINT),
+    ]
+
+
+# Use win32api.EnumDisplayDevices via pywin32 instead of a ctypes struct.
 
 
 def get_monitor_rect_from_point(pt: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -187,35 +235,46 @@ def set_primary_monitor(target_rect: tuple[int, int, int, int]) -> None:
         return  # already primary
 
     user32 = ctypes.windll.user32
-    i = 0
-    while True:
-        dd = _DISPLAY_DEVICEW()
-        dd.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
-        if not user32.EnumDisplayDevicesW(None, i, ctypes.byref(dd), 0):
-            break
-        i += 1
-        if not (dd.StateFlags & _DISPLAY_DEVICE_ACTIVE):
-            continue
 
-        dm = _DEVMODEW()
-        dm.dmSize = ctypes.sizeof(_DEVMODEW)
-        if not user32.EnumDisplaySettingsW(dd.DeviceName, _ENUM_CURRENT_SETTINGS, ctypes.byref(dm)):
-            continue
+    # First call: query required buffer sizes.
+    num_paths = wintypes.UINT(0)
+    num_modes = wintypes.UINT(0)
+    ret = user32.QueryDisplayConfig(
+        _QDC_ONLY_ACTIVE_PATHS,
+        ctypes.byref(num_paths), None,
+        ctypes.byref(num_modes), None,
+        None,
+    )
+    if ret != 0:
+        raise ctypes.WinError(ret)
 
-        dm.dmPosition.x -= shift_x
-        dm.dmPosition.y -= shift_y
-        dm.dmFields |= _DM_POSITION
+    paths = (_DISPLAYCONFIG_PATH_INFO * num_paths.value)()
+    modes = (_DISPLAYCONFIG_MODE_INFO * num_modes.value)()
 
-        user32.ChangeDisplaySettingsExW(
-            dd.DeviceName,
-            ctypes.byref(dm),
-            None,
-            _CDS_UPDATEREGISTRY | _CDS_NORESET,
-            None,
-        )
+    # Second call: retrieve the actual configuration.
+    ret = user32.QueryDisplayConfig(
+        _QDC_ONLY_ACTIVE_PATHS,
+        ctypes.byref(num_paths), paths,
+        ctypes.byref(num_modes), modes,
+        None,
+    )
+    if ret != 0:
+        raise ctypes.WinError(ret)
 
-    # Apply all queued changes at once.
-    user32.ChangeDisplaySettingsExW(None, None, None, 0, None)
+    # Shift every source position so the target monitor ends up at (0, 0).
+    for i in range(num_modes.value):
+        if modes[i].infoType == _DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE:
+            modes[i].sourceMode.position.x -= shift_x
+            modes[i].sourceMode.position.y -= shift_y
+
+    ret = user32.SetDisplayConfig(
+        num_paths.value, paths,
+        num_modes.value, modes,
+        _SDC_APPLY | _SDC_USE_SUPPLIED_DISPLAY_CONFIG | _SDC_SAVE_TO_DATABASE | _SDC_ALLOW_CHANGES,
+    )
+    if ret != 0:
+        raise ctypes.WinError(ret)
+
     print(f"Primary display set to monitor at {target_rect}.")
 
 
@@ -231,16 +290,15 @@ def _get_monitor_device_name(target_rect: tuple[int, int, int, int]) -> str:
 
 def _get_adapter_string(device_name: str) -> str:
     """Return the adapter description (e.g. 'NVIDIA GeForce RTX 4090') for a device path."""
-    user32 = ctypes.windll.user32
     i = 0
     while True:
-        dd = _DISPLAY_DEVICEW()
-        dd.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
-        if not user32.EnumDisplayDevicesW(None, i, ctypes.byref(dd), 0):
+        try:
+            dd = win32api.EnumDisplayDevices(None, i)
+        except Exception:
             break
         i += 1
-        if dd.DeviceName.rstrip("\x00").strip() == device_name.strip():
-            return dd.DeviceString.rstrip("\x00").strip()
+        if getattr(dd, 'DeviceName', '').strip() == device_name.strip():
+            return getattr(dd, 'DeviceString', '').strip()
     return ""
 
 
@@ -293,23 +351,19 @@ def _get_monitor_friendly_name(target_rect: tuple[int, int, int, int]) -> str:
     device_name = _get_monitor_device_name(target_rect)
     if not device_name:
         return ""
-
-    user32 = ctypes.windll.user32
     i = 0
     while True:
-        dd = _DISPLAY_DEVICEW()
-        dd.cb = ctypes.sizeof(_DISPLAY_DEVICEW)
-        if not user32.EnumDisplayDevicesW(device_name, i, ctypes.byref(dd), 0):
+        try:
+            dd = win32api.EnumDisplayDevices(device_name, i)
+        except Exception:
             break
-
-        name = dd.DeviceString.rstrip("\x00").strip()
-        if name and name.lower() != "generic pnp monitor":
+        name = getattr(dd, 'DeviceString', '').strip()
+        if name and name.lower() != 'generic pnp monitor':
             return name
-        wmi_name = _get_monitor_wmi_name(dd.DeviceID.rstrip("\x00").strip())
-        if wmi_name and wmi_name.lower() != "generic pnp monitor":
+        wmi_name = _get_monitor_wmi_name(getattr(dd, 'DeviceID', '').strip())
+        if wmi_name and wmi_name.lower() != 'generic pnp monitor':
             return wmi_name
         i += 1
-
     return ""
 
 
@@ -331,49 +385,110 @@ def get_monitor_name(target_rect: tuple[int, int, int, int]) -> str:
 
 def _set_default_audio_device(device_id: str) -> None:
     """
-    Set the Windows default audio playback endpoint via the undocumented
-    IPolicyConfig COM interface (works on Vista through Windows 11).
+    Set the Windows default audio playback endpoint.
+
+    Tier 1 – Compile and run a small C# exe via csc.exe (.NET Framework
+    compiler; always present on Windows 10/11).  The compiled exe uses
+    [STAThread] on Main and the exact same [ComImport] CoClass pattern as
+    AudioDeviceCmdlets.  This bypasses the Add-Type / __ComObject RCW
+    caching issue that blocks QI for undocumented COM IIDs in PS 5.1.
+
+    Tier 2 – AudioDeviceCmdlets PowerShell module (if already installed).
+
+    Device ID is passed as a command-line argument / env var (no injection).
     """
+    import subprocess, shutil, os
+
+    errors: list[str] = []
+
+    # ------------------------------------------------------------------ #
+    # Tier 2: AudioDeviceCmdlets (auto-install on first use, then run)
+    # ------------------------------------------------------------------ #
+    ps_exe = shutil.which("pwsh") or shutil.which("powershell")
+    if ps_exe:
+        # Install if missing (first use only; subsequent runs are fast).
+        ps_install = r"""
+$ErrorActionPreference='Stop'
+if (-not (Get-Module -ListAvailable -Name AudioDeviceCmdlets)) {
+    Install-Module AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber -Repository PSGallery
+}
+Import-Module AudioDeviceCmdlets -Force
+Set-AudioDevice -ID $env:MOVE_AUDIO_DEVICE_ID
+Write-Output "SUCCESS"
+"""
+        env = os.environ.copy()
+        env["MOVE_AUDIO_DEVICE_ID"] = device_id
+        try:
+            print("  [audio] trying AudioDeviceCmdlets (may install on first run)...")
+            # Ensure we pass the exact full ID string that AudioDeviceCmdlets expects
+            # (e.g. SWD\\MMDEVAPI\\{0.0.0.00000000}.{GUID}).
+            print(f"  [audio] PowerShell will use MOVE_AUDIO_DEVICE_ID={device_id}")
+            r = subprocess.run(
+                [ps_exe, "-NoProfile", "-Sta", "-Command", ps_install],
+                capture_output=True, text=True, timeout=120, env=env,
+            )
+            if r.returncode == 0 and "SUCCESS" in r.stdout:
+                return
+            # If PowerShell didn't report success, include stdout/stderr for diagnosis.
+            errors.append(
+                f"AudioDeviceCmdlets rc={r.returncode}: "
+                f"STDOUT: {(r.stdout or '').strip()[:400]} STDERR: {(r.stderr or '').strip()[:400]}"
+            )
+        except subprocess.TimeoutExpired:
+            errors.append("AudioDeviceCmdlets: install/run timed out after 120s")
+        except Exception as exc:
+            errors.append(f"AudioDeviceCmdlets tier: {exc}")
+
+    # ------------------------------------------------------------------ #
+    # Tier 3: SoundVolumeView (NirSoft) — download once, ~200 KB exe
+    # Simple CLI tool that reliably sets the default audio device on all
+    # Windows versions without any COM interface hackery.
+    # ------------------------------------------------------------------ #
     try:
-        import comtypes
-        import comtypes.client  # noqa: F401  (ensures COM runtime is initialised)
-    except ImportError:
-        raise ImportError("comtypes is required – install pycaw: pip install pycaw")
+        import urllib.request
+        import hashlib
 
-    # IPolicyConfig – undocumented COM interface present in AudioSes.dll.
-    # CLSID: {870AF99C-171D-4F9E-AF0D-E63DF40C2BC9}
-    # IID:   {F8679F50-850A-41CF-9C72-430F290290C8}
-    class _IPolicyConfig(comtypes.IUnknown):
-        _iid_ = comtypes.GUID("{F8679F50-850A-41CF-9C72-430F290290C8}")
-        _methods_ = [
-            # placeholder entries keep the vtable indices correct:
-            comtypes.STDMETHOD(comtypes.HRESULT, "GetMixFormat"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "GetDeviceFormat"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "ResetDeviceFormat"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "SetDeviceFormat"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "GetProcessingPeriod"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "SetProcessingPeriod"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "GetShareMode"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "SetShareMode"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "GetPropertyValue"),
-            comtypes.STDMETHOD(comtypes.HRESULT, "SetPropertyValue"),
-            comtypes.STDMETHOD(
-                comtypes.HRESULT,
-                "SetDefaultEndpoint",
-                [wintypes.LPWSTR, ctypes.c_uint],
-            ),
-            comtypes.STDMETHOD(comtypes.HRESULT, "SetEndpointVisibility"),
-        ]
+        svv_dir = os.path.join(os.path.expanduser("~"), ".move_to_mouse")
+        svv_exe = os.path.join(svv_dir, "SoundVolumeView.exe")
+        svv_url = "https://www.nirsoft.net/utils/soundvolumeview-x64.zip"
 
-    policy = comtypes.CoCreateInstance(
-        comtypes.GUID("{870AF99C-171D-4F9E-AF0D-E63DF40C2BC9}"),
-        interface=_IPolicyConfig,
-        clsctx=comtypes.CLSCTX_ALL,
+        if not os.path.exists(svv_exe):
+            os.makedirs(svv_dir, exist_ok=True)
+            print("  [audio] downloading SoundVolumeView (one-time, ~200 KB)...")
+            zip_path = svv_exe + ".zip"
+            urllib.request.urlretrieve(svv_url, zip_path)
+            import zipfile
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                # Extract just the exe
+                for name in zf.namelist():
+                    if name.lower() == "soundvolumeview.exe":
+                        with zf.open(name) as src, open(svv_exe, "wb") as dst:
+                            dst.write(src.read())
+                        break
+            os.remove(zip_path)
+
+        if os.path.exists(svv_exe):
+            r = subprocess.run(
+                [svv_exe, "/SetDefault", device_id, "all"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return
+            errors.append(f"SoundVolumeView rc={r.returncode}: {(r.stderr or r.stdout).strip()[:200]}")
+    except Exception as exc:
+        errors.append(f"SoundVolumeView tier: {exc}")
+
+    for e in errors:
+        print(f"  [audio] {e[:300]}")
+
+    raise RuntimeError(
+        "All audio device switch methods failed.\n"
+        "Options to fix:\n"
+        "  1. Install AudioDeviceCmdlets (PowerShell):\n"
+        "     Install-Module AudioDeviceCmdlets -Scope CurrentUser\n"
+        "  2. Download SoundVolumeView manually to ~/.move_to_mouse/SoundVolumeView.exe:\n"
+        "     https://www.nirsoft.net/utils/sound_volume_view.html"
     )
-    # Apply for all three roles: eConsole=0, eMultimedia=1, eCommunications=2
-    set_default = getattr(policy, "SetDefaultEndpoint")
-    for role in range(3):
-        set_default(device_id, role)
 
 
 def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug: bool = False) -> bool:
@@ -405,7 +520,7 @@ def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug:
         return False
 
     monitor_name = get_monitor_name(target_rect)
-    adapter_words = [w for w in adapter.split() if len(w) > 3]
+    # adapter_words was unused; tokenized adapter is stored in adapter_tokens
 
     def normalize(text: str) -> str:
         text = str(text or "").lower().strip()
@@ -448,7 +563,7 @@ def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug:
         print(f"Audio endpoint scoring for monitor '{monitor_name}':")
         for monitor_score, adapter_score, total_score, ep in scored:
             print(
-                f"  {total_score:.1f}: {ep.FriendlyName!r} "
+                f"  {total_score:.1f}: {ep.FriendlyName!r} (id={ep.id}) "
                 f"(monitor={monitor_score:.1f}, adapter={adapter_score:.1f})"
             )
 
@@ -472,6 +587,48 @@ def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug:
         if scores and scores[0][0] > 0.55:
             best = scores[0][1]
 
+    # Prefer endpoints whose GUID matches a PnP audio device for this monitor/adapter.
+    # This helps when multiple logical endpoints have identical friendly names
+    # but different MMDevice GUIDs (the case you observed: 3650... vs b070...).
+    try:
+        pnp_guids = set()
+        try:
+            import win32com.client
+            locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
+            svc = locator.ConnectServer('.', 'root\\cimv2')
+            # Collect GUIDs from PnP audio endpoints whose names contain
+            # tokens from the monitor name or the adapter description.
+            query = "SELECT PNPDeviceID, Name FROM Win32_PnPEntity WHERE PNPClass='AudioEndpoint'"
+            for item in svc.ExecQuery(query):
+                name = str(getattr(item, 'Name', '') or '').lower()
+                # tokenize the PnP name similar to normalize()
+                name_tokens = set(re.sub(r"[^a-z0-9]+", " ", name).split())
+                if (monitor_tokens and (name_tokens & monitor_tokens)) or (adapter_tokens and (name_tokens & adapter_tokens)):
+                    pid = str(getattr(item, 'PNPDeviceID', '') or '')
+                    # Extract all GUID-like brace groups and add them.
+                    for m in re.finditer(r"\{([0-9A-Fa-f\-]{36})\}", pid):
+                        pnp_guids.add(m.group(1).lower())
+        except Exception:
+            pnp_guids = set()
+
+        if pnp_guids:
+            if debug:
+                print(f"  [audio] PnP GUIDs for adapter/monitor: {sorted(pnp_guids)}")
+            guid_matches = []
+            for monitor_score, adapter_score, total_score, ep in scored:
+                eid = (ep.id or '').lower()
+                for g in pnp_guids:
+                    if g in eid:
+                        guid_matches.append((total_score, ep))
+                        break
+            if guid_matches:
+                guid_matches.sort(key=lambda t: t[0], reverse=True)
+                best = guid_matches[0][1]
+                if debug:
+                    print(f"  [audio] Prefer endpoint by PnP GUID: {best.FriendlyName!r} (id={best.id})")
+    except Exception:
+        pass
+
     if best is None:
         available = [ep.FriendlyName for ep in endpoints]
         print(
@@ -480,13 +637,48 @@ def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug:
         )
         return False
 
+    def _get_current_default_id() -> str:
+        """Return the device-id of the current default playback endpoint, or ''."""
+        try:
+            import comtypes
+            import comtypes.client  # noqa: F401
+            from pycaw.pycaw import IMMDeviceEnumerator, EDataFlow, ERole
+            # MMDeviceEnumerator CLSID – always registered on Windows Vista+
+            _CLSID_MMDevEnum = comtypes.GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+            enumerator = comtypes.CoCreateInstance(
+                _CLSID_MMDevEnum,
+                IMMDeviceEnumerator,
+                comtypes.CLSCTX_INPROC_SERVER,
+            )
+            # GetDefaultAudioEndpoint is a COM method; getattr avoids Pylance noise.
+            dev = getattr(enumerator, "GetDefaultAudioEndpoint")(
+                EDataFlow.eRender.value,
+                ERole.eConsole.value,
+            )
+            return getattr(dev, "GetId")()
+        except Exception as exc:
+            print(f"  [debug] cannot read current default audio device: {exc}")
+            return ""
+
+    def _id_to_name(dev_id: str) -> str:
+        for ep in endpoints:
+            if ep.id == dev_id:
+                return ep.FriendlyName or dev_id
+        return dev_id or "(unknown)"
+
+    before_id = _get_current_default_id()
+    print(f"Audio default before: {_id_to_name(before_id)!r}")
+    print(f"Audio target:         {best.FriendlyName!r}  (id={best.id})")
+
     try:
         _set_default_audio_device(best.id)
-        print(f"Default audio output → {best.FriendlyName}")
-        return True
     except Exception as exc:
         print(f"Failed to set default audio device: {exc}")
         return False
+
+    # Verification is done inside the C# exe (STA, correct COM context).
+    # The exe prints SUCCESS or SUCCESS_UNCONFIRMED with before/after device IDs.
+    return True
 
 
 def install_context_menu(key_path: str, script_path: str):
@@ -557,28 +749,17 @@ def main():
         uninstall_context_menu(key_path)
         return
 
+    # Move the windows to the display with the mouse pointer.
     pt = win32api.GetCursorPos()
     target = get_monitor_rect_from_point(pt)
     monitor_name = get_monitor_name(target)
     print(f"Selected monitor: {monitor_name}")
 
-    # Switch audio output before the coordinate system shifts.
-    set_default_audio_for_monitor(target, debug=args.debug_audio)
-
-    # Make the target monitor primary (shifts all display coordinates).
-    shift_x, shift_y = target[0], target[1]
-    set_primary_monitor(target)
-
-    if shift_x != 0 or shift_y != 0:
-        target = (
-            target[0] - shift_x,
-            target[1] - shift_y,
-            target[2] - shift_x,
-            target[3] - shift_y,
-        )
-
     moved = move_windows_to_monitor(target, verbose=args.verbose_windows)
     print(f"Moved {moved} windows to monitor at {target}.")
+
+    set_primary_monitor(target)
+    set_default_audio_for_monitor(target, debug=args.debug_audio)
 
 
 if __name__ == "__main__":
