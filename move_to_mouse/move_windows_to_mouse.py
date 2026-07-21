@@ -16,6 +16,8 @@ import os
 import re
 import sys
 from ctypes import wintypes
+from display_primary import set_primary_monitor
+
 
 try:
     import win32gui
@@ -27,111 +29,6 @@ except Exception:
     raise
 
 # --------------------------------------------------------------------------- #
-# ctypes structures for SetDisplayConfig / QueryDisplayConfig (CCD API)
-# --------------------------------------------------------------------------- #
-_QDC_ONLY_ACTIVE_PATHS           = 0x00000002
-_SDC_USE_SUPPLIED_DISPLAY_CONFIG = 0x00000020
-_SDC_APPLY                       = 0x00000080
-_SDC_NO_OPTIMIZATION             = 0x00000100
-_SDC_SAVE_TO_DATABASE            = 0x00000200
-_SDC_ALLOW_CHANGES               = 0x00000400
-_DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE = 1
-
-
-class _POINTL(ctypes.Structure):
-    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
-
-
-class _DISPLAYCONFIG_RATIONAL(ctypes.Structure):
-    _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
-
-
-class _DISPLAYCONFIG_2DREGION(ctypes.Structure):
-    _fields_ = [("cx", wintypes.UINT), ("cy", wintypes.UINT)]
-
-
-class _DISPLAYCONFIG_VIDEO_SIGNAL_INFO(ctypes.Structure):
-    _fields_ = [
-        ("pixelRate",        ctypes.c_uint64),
-        ("hSyncFreq",        _DISPLAYCONFIG_RATIONAL),
-        ("vSyncFreq",        _DISPLAYCONFIG_RATIONAL),
-        ("activeSize",       _DISPLAYCONFIG_2DREGION),
-        ("totalSize",        _DISPLAYCONFIG_2DREGION),
-        ("videoStandard",    wintypes.UINT),   # union simplified to UINT (22 bits used)
-        ("scanLineOrdering", wintypes.UINT),
-    ]  # 48 bytes
-
-
-class _DISPLAYCONFIG_TARGET_MODE(ctypes.Structure):
-    _fields_ = [("targetVideoSignalInfo", _DISPLAYCONFIG_VIDEO_SIGNAL_INFO)]
-
-
-class _DISPLAYCONFIG_SOURCE_MODE(ctypes.Structure):
-    _fields_ = [
-        ("width",       wintypes.UINT),
-        ("height",      wintypes.UINT),
-        ("pixelFormat", wintypes.UINT),
-        ("position",    _POINTL),
-    ]
-
-
-class _DISPLAYCONFIG_DESKTOP_IMAGE_INFO(ctypes.Structure):
-    _fields_ = [
-        ("PathSourceSize",     _POINTL),
-        ("DesktopImageRegion", wintypes.RECT),
-        ("DesktopImageClip",   wintypes.RECT),
-    ]
-
-
-class _DISPLAYCONFIG_MODE_INFO_UNION(ctypes.Union):
-    _fields_ = [
-        ("targetMode",      _DISPLAYCONFIG_TARGET_MODE),
-        ("sourceMode",      _DISPLAYCONFIG_SOURCE_MODE),
-        ("desktopImageInfo", _DISPLAYCONFIG_DESKTOP_IMAGE_INFO),
-    ]
-
-
-class _DISPLAYCONFIG_MODE_INFO(ctypes.Structure):
-    _anonymous_ = ("_u",)
-    _fields_ = [
-        ("infoType",  wintypes.UINT),
-        ("id",        wintypes.UINT),
-        ("adapterId", ctypes.c_uint64),   # LUID fits in a uint64
-        ("_u",        _DISPLAYCONFIG_MODE_INFO_UNION),
-    ]
-
-
-class _DISPLAYCONFIG_PATH_SOURCE_INFO(ctypes.Structure):
-    _fields_ = [
-        ("adapterId",   ctypes.c_uint64),
-        ("id",          wintypes.UINT),
-        ("modeInfoIdx", wintypes.UINT),
-        ("statusFlags", wintypes.UINT),
-    ]
-
-
-class _DISPLAYCONFIG_PATH_TARGET_INFO(ctypes.Structure):
-    _fields_ = [
-        ("adapterId",        ctypes.c_uint64),
-        ("id",               wintypes.UINT),
-        ("modeInfoIdx",      wintypes.UINT),
-        ("outputTechnology", wintypes.UINT),
-        ("rotation",         wintypes.UINT),
-        ("scaling",          wintypes.UINT),
-        ("refreshRate",      _DISPLAYCONFIG_RATIONAL),
-        ("scanLineOrdering", wintypes.UINT),
-        ("targetAvailable",  wintypes.BOOL),
-        ("statusFlags",      wintypes.UINT),
-    ]
-
-
-class _DISPLAYCONFIG_PATH_INFO(ctypes.Structure):
-    _fields_ = [
-        ("sourceInfo", _DISPLAYCONFIG_PATH_SOURCE_INFO),
-        ("targetInfo", _DISPLAYCONFIG_PATH_TARGET_INFO),
-        ("flags",      wintypes.UINT),
-    ]
-
 
 # Use win32api.EnumDisplayDevices via pywin32 instead of a ctypes struct.
 
@@ -228,54 +125,6 @@ def move_windows_to_monitor(target_mon: tuple[int, int, int, int], verbose: bool
     return moved
 
 
-def set_primary_monitor(target_rect: tuple[int, int, int, int]) -> None:
-    shift_x = target_rect[0]
-    shift_y = target_rect[1]
-    if shift_x == 0 and shift_y == 0:
-        return  # already primary
-
-    user32 = ctypes.windll.user32
-
-    # First call: query required buffer sizes.
-    num_paths = wintypes.UINT(0)
-    num_modes = wintypes.UINT(0)
-    ret = user32.QueryDisplayConfig(
-        _QDC_ONLY_ACTIVE_PATHS,
-        ctypes.byref(num_paths), None,
-        ctypes.byref(num_modes), None,
-        None,
-    )
-    if ret != 0:
-        raise ctypes.WinError(ret)
-
-    paths = (_DISPLAYCONFIG_PATH_INFO * num_paths.value)()
-    modes = (_DISPLAYCONFIG_MODE_INFO * num_modes.value)()
-
-    # Second call: retrieve the actual configuration.
-    ret = user32.QueryDisplayConfig(
-        _QDC_ONLY_ACTIVE_PATHS,
-        ctypes.byref(num_paths), paths,
-        ctypes.byref(num_modes), modes,
-        None,
-    )
-    if ret != 0:
-        raise ctypes.WinError(ret)
-
-    # Shift every source position so the target monitor ends up at (0, 0).
-    for i in range(num_modes.value):
-        if modes[i].infoType == _DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE:
-            modes[i].sourceMode.position.x -= shift_x
-            modes[i].sourceMode.position.y -= shift_y
-
-    ret = user32.SetDisplayConfig(
-        num_paths.value, paths,
-        num_modes.value, modes,
-        _SDC_APPLY | _SDC_USE_SUPPLIED_DISPLAY_CONFIG | _SDC_SAVE_TO_DATABASE | _SDC_ALLOW_CHANGES,
-    )
-    if ret != 0:
-        raise ctypes.WinError(ret)
-
-    print(f"Primary display set to monitor at {target_rect}.")
 
 
 # --------------------------------------------------------------------------- #
@@ -383,111 +232,75 @@ def get_monitor_name(target_rect: tuple[int, int, int, int]) -> str:
     return "Unknown monitor"
 
 
-def _set_default_audio_device(device_id: str) -> None:
+def _set_default_audio_device(device_id: str, debug: bool = False) -> None:
+    """Set the Windows default audio playback endpoint.
+
+    Try the direct PolicyConfig COM path first, but keep the PowerShell/
+    SoundVolumeView fallback in place when direct COM is unavailable or fails.
     """
-    Set the Windows default audio playback endpoint.
-
-    Tier 1 – Compile and run a small C# exe via csc.exe (.NET Framework
-    compiler; always present on Windows 10/11).  The compiled exe uses
-    [STAThread] on Main and the exact same [ComImport] CoClass pattern as
-    AudioDeviceCmdlets.  This bypasses the Add-Type / __ComObject RCW
-    caching issue that blocks QI for undocumented COM IIDs in PS 5.1.
-
-    Tier 2 – AudioDeviceCmdlets PowerShell module (if already installed).
-
-    Device ID is passed as a command-line argument / env var (no injection).
-    """
-    import subprocess, shutil, os
-
     errors: list[str] = []
-
-    # ------------------------------------------------------------------ #
-    # Tier 2: AudioDeviceCmdlets (auto-install on first use, then run)
-    # ------------------------------------------------------------------ #
-    ps_exe = shutil.which("pwsh") or shutil.which("powershell")
-    if ps_exe:
-        # Install if missing (first use only; subsequent runs are fast).
-        ps_install = r"""
-$ErrorActionPreference='Stop'
-if (-not (Get-Module -ListAvailable -Name AudioDeviceCmdlets)) {
-    Install-Module AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber -Repository PSGallery
-}
-Import-Module AudioDeviceCmdlets -Force
-Set-AudioDevice -ID $env:MOVE_AUDIO_DEVICE_ID
-Write-Output "SUCCESS"
-"""
-        env = os.environ.copy()
-        env["MOVE_AUDIO_DEVICE_ID"] = device_id
-        try:
-            print("  [audio] trying AudioDeviceCmdlets (may install on first run)...")
-            # Ensure we pass the exact full ID string that AudioDeviceCmdlets expects
-            # (e.g. SWD\\MMDEVAPI\\{0.0.0.00000000}.{GUID}).
-            print(f"  [audio] PowerShell will use MOVE_AUDIO_DEVICE_ID={device_id}")
-            r = subprocess.run(
-                [ps_exe, "-NoProfile", "-Sta", "-Command", ps_install],
-                capture_output=True, text=True, timeout=120, env=env,
-            )
-            if r.returncode == 0 and "SUCCESS" in r.stdout:
-                return
-            # If PowerShell didn't report success, include stdout/stderr for diagnosis.
-            errors.append(
-                f"AudioDeviceCmdlets rc={r.returncode}: "
-                f"STDOUT: {(r.stdout or '').strip()[:400]} STDERR: {(r.stderr or '').strip()[:400]}"
-            )
-        except subprocess.TimeoutExpired:
-            errors.append("AudioDeviceCmdlets: install/run timed out after 120s")
-        except Exception as exc:
-            errors.append(f"AudioDeviceCmdlets tier: {exc}")
-
-    # ------------------------------------------------------------------ #
-    # Tier 3: SoundVolumeView (NirSoft) — download once, ~200 KB exe
-    # Simple CLI tool that reliably sets the default audio device on all
-    # Windows versions without any COM interface hackery.
-    # ------------------------------------------------------------------ #
+    if debug:
+        print(f"  [audio] trying direct PolicyConfig COM for device id={device_id}")
     try:
-        import urllib.request
-        import hashlib
-
-        svv_dir = os.path.join(os.path.expanduser("~"), ".move_to_mouse")
-        svv_exe = os.path.join(svv_dir, "SoundVolumeView.exe")
-        svv_url = "https://www.nirsoft.net/utils/soundvolumeview-x64.zip"
-
-        if not os.path.exists(svv_exe):
-            os.makedirs(svv_dir, exist_ok=True)
-            print("  [audio] downloading SoundVolumeView (one-time, ~200 KB)...")
-            zip_path = svv_exe + ".zip"
-            urllib.request.urlretrieve(svv_url, zip_path)
-            import zipfile
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                # Extract just the exe
-                for name in zf.namelist():
-                    if name.lower() == "soundvolumeview.exe":
-                        with zf.open(name) as src, open(svv_exe, "wb") as dst:
-                            dst.write(src.read())
-                        break
-            os.remove(zip_path)
-
-        if os.path.exists(svv_exe):
-            r = subprocess.run(
-                [svv_exe, "/SetDefault", device_id, "all"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if r.returncode == 0:
-                return
-            errors.append(f"SoundVolumeView rc={r.returncode}: {(r.stderr or r.stdout).strip()[:200]}")
+        _set_default_audio_endpoint_com(device_id, debug=debug)
+        return
     except Exception as exc:
-        errors.append(f"SoundVolumeView tier: {exc}")
+        errors.append(f"Direct PolicyConfig COM: {exc}")
+        if debug:
+            print(f"  [audio] PolicyConfig COM exception: {exc}")
 
-    for e in errors:
-        print(f"  [audio] {e[:300]}")
+    try:
+        from audio_fallback import set_default_audio_device_fallback
+        set_default_audio_device_fallback(device_id)
+        return
+    except Exception as exc:
+        errors.append(f"Fallback audio method: {exc}")
+
+    raise RuntimeError("Failed to set default audio device.\n" + "\n".join(errors))
+
+
+def _set_default_audio_endpoint_com(device_id: str, debug: bool = False) -> None:
+    """Attempt to set the default endpoint via PolicyConfig COM."""
+    from ctypes import c_ulong, c_wchar_p
+    from comtypes import CLSCTX_INPROC_SERVER, GUID, CoCreateInstance
+
+    try:
+        from pycaw.api.policyconfig import IPolicyConfig
+    except ImportError:
+        raise RuntimeError(
+            "pycaw.api.policyconfig is required for direct PolicyConfig COM access. "
+            "Install pycaw and try again."
+        )
+
+    _CLSID_PCC = GUID("{870af99c-171d-4f9e-af0d-e63df40c2bc9}")
+    try:
+        policy = CoCreateInstance(_CLSID_PCC, IPolicyConfig, clsctx=CLSCTX_INPROC_SERVER)
+    except Exception as exc:
+        raise RuntimeError(f"CoCreateInstance PolicyConfigClient failed: {exc}") from exc
+    if policy is None:
+        raise RuntimeError("CoCreateInstance PolicyConfigClient returned None")
+
+    slot_errors: list[str] = []
+    for role in (0, 1, 2):
+        try:
+            hr = policy.SetDefaultEndpoint(device_id, c_ulong(role))
+        except Exception as exc:
+            slot_errors.append(f"role={role} exception={exc}")
+            if debug:
+                print(f"  [audio] PolicyConfig role={role} exception: {exc}")
+            continue
+
+        if hr == 0:
+            if debug:
+                print(f"  [audio] PolicyConfig SetDefaultEndpoint succeeded for role={role}")
+            return
+
+        slot_errors.append(f"role={role} hr=0x{hr:08x}")
+        if debug:
+            print(f"  [audio] PolicyConfig role={role} hr=0x{hr:08x}")
 
     raise RuntimeError(
-        "All audio device switch methods failed.\n"
-        "Options to fix:\n"
-        "  1. Install AudioDeviceCmdlets (PowerShell):\n"
-        "     Install-Module AudioDeviceCmdlets -Scope CurrentUser\n"
-        "  2. Download SoundVolumeView manually to ~/.move_to_mouse/SoundVolumeView.exe:\n"
-        "     https://www.nirsoft.net/utils/sound_volume_view.html"
+        f"PolicyConfig SetDefaultEndpoint failed: {'; '.join(slot_errors)}"
     )
 
 
@@ -671,7 +484,7 @@ def set_default_audio_for_monitor(target_rect: tuple[int, int, int, int], debug:
     print(f"Audio target:         {best.FriendlyName!r}  (id={best.id})")
 
     try:
-        _set_default_audio_device(best.id)
+        _set_default_audio_device(best.id, debug=debug)
     except Exception as exc:
         print(f"Failed to set default audio device: {exc}")
         return False
