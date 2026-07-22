@@ -76,7 +76,7 @@ def main():
         count = move_windows_to_display(target, verbose=args.verbose_windows)
         print(f"Moved {count} windows to display at {target}.")
         primary_display_name, set_primary_error = Display.set_primary(target)
-        if set_primary_error is None:
+        if primary_display_name:
             print(f"Primary display set to {primary_display_name}.")
         else:
             print(
@@ -88,7 +88,7 @@ def main():
         audio_target_name, move_sound_error = move_default_audio_to_display(
             target, debug=args.debug_audio
         )
-        if move_sound_error is None:
+        if audio_target_name:
             print(f"Default audio moved to {audio_target_name}.")
         else:
             print(f"Failed to move default audio for {target_name}: {move_sound_error}")

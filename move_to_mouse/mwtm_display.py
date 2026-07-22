@@ -134,16 +134,13 @@ class Display:
         user32 = ctypes.windll.user32
         num_paths = wintypes.UINT(0)
         num_modes = wintypes.UINT(0)
-        ret = user32.QueryDisplayConfig(
+        ret = user32.GetDisplayConfigBufferSizes(
             _QDC_ONLY_ACTIVE_PATHS,
             ctypes.byref(num_paths),
-            None,
             ctypes.byref(num_modes),
-            None,
-            None,
         )
         if ret != 0:
-            return None, f"QueryDisplayConfig(count) failed: {_fmt_error(ret)}"
+            return None, f"GetDisplayConfigBufferSizes failed: {_fmt_error(ret)}"
 
         paths = (_DISPLAYCONFIG_PATH_INFO * num_paths.value)()
         modes = (_DISPLAYCONFIG_MODE_INFO * num_modes.value)()
