@@ -261,8 +261,7 @@ class Display:
         return ""
 
     @staticmethod
-    def _friendly_name(target_rect: tuple[int, int, int, int]) -> str:
-        device_name = Display.device_name(target_rect)
+    def _friendly_name_for_device(device_name: str) -> str:
         if not device_name:
             return ""
         i = 0
@@ -282,9 +281,8 @@ class Display:
         return ""
 
     @staticmethod
-    def name(target_rect: tuple[int, int, int, int]) -> str:
-        display_name = Display._friendly_name(target_rect)
-        device_name = Display.device_name(target_rect)
+    def name_from_device(device_name: str) -> str:
+        display_name = Display._friendly_name_for_device(device_name)
         adapter = Display.adapter_name(device_name)
 
         if display_name:
@@ -296,3 +294,8 @@ class Display:
         if device_name:
             return device_name
         return "Unknown monitor"
+
+    @staticmethod
+    def name(target_rect: tuple[int, int, int, int]) -> str:
+        device_name = Display.device_name(target_rect)
+        return Display.name_from_device(device_name)

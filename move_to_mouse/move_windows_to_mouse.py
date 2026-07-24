@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Move windows to the monitor containing the mouse cursor.
+"""Move windows to the monitor containing the mouse pointer.
 
 Example:
-    python move_windows_to_mouse.py            # move_all (default)
-  python move_windows_to_mouse.py install    # add Windows context menu entry
-  python move_windows_to_mouse.py uninstall  # remove context menu entry
-    python move_windows_to_mouse.py move_windows
-    python move_windows_to_mouse.py move_sound
-    python move_windows_to_mouse.py move_all
+    python move_windows_to_mouse.py              # see move_all (default)
+    python move_windows_to_mouse.py move_all     # move windows and sound to display
+    python move_windows_to_mouse.py move_windows # only move windows to the display
+    python move_windows_to_mouse.py move_sound   # only move default audio output to the display
+    python move_windows_to_mouse.py install      # add Windows context menu entry
+    python move_windows_to_mouse.py uninstall    # remove context menu entry
 
-Install dependencies:
-  pip install -r requirements.txt
+Install dependencies (includes build tools):
+    python -m pip install .
 """
 
 import argparse
@@ -67,15 +67,27 @@ def main():
 
     # Move windows to the target display under the pointer.
     pt = Display.pointer_position()
-    target = Display.rect_from_point(pt)
-    target_name = Display.name(target)
+    target_coords = Display.rect_from_point(pt)
+    target_device_name = Display.device_name(target_coords)
+    target_name = Display.name_from_device(target_device_name)
 
     print(f"Selected display: {target_name}")
 
+    # For move_all, run audio before set_primary so target monitor geometry
+    # is still valid for display-to-audio endpoint matching.
+    if do_move_sound:
+        audio_target_name, move_sound_error = move_default_audio_to_display(
+            target_device_name, debug=args.debug_audio
+        )
+        if audio_target_name:
+            print(f"Default audio moved to {audio_target_name}.")
+        else:
+            print(f"Failed to move default audio for {target_name}: {move_sound_error}")
+
     if do_move_windows:
-        count = move_windows_to_display(target, verbose=args.verbose_windows)
-        print(f"Moved {count} windows to display at {target}.")
-        primary_display_name, set_primary_error = Display.set_primary(target)
+        count = move_windows_to_display(target_coords, verbose=args.verbose_windows)
+        print(f"Moved {count} windows to display at {target_coords}.")
+        primary_display_name, set_primary_error = Display.set_primary(target_coords)
         if primary_display_name:
             print(f"Primary display set to {primary_display_name}.")
         else:
@@ -83,15 +95,6 @@ def main():
                 f"Failed to set primary display to {target_name}: "
                 f"{set_primary_error}"
             )
-
-    if do_move_sound:
-        audio_target_name, move_sound_error = move_default_audio_to_display(
-            target, debug=args.debug_audio
-        )
-        if audio_target_name:
-            print(f"Default audio moved to {audio_target_name}.")
-        else:
-            print(f"Failed to move default audio for {target_name}: {move_sound_error}")
 
 
 if __name__ == "__main__":

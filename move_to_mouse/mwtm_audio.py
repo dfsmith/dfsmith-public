@@ -89,11 +89,11 @@ def _set_default_audio_endpoint_com(device_id: str, debug: bool = False) -> None
 
 
 def move_default_audio_to_display(
-    target_rect: tuple[int, int, int, int], debug: bool = False
+    display_device_name: str, debug: bool = False
 ) -> tuple[str | None, str | None]:
     """
     Switch the Windows default audio output to the endpoint associated with
-    the display adapter driving the monitor at *target_rect*.
+    the display adapter driving the monitor for *display_device_name*.
 
     Matching is done by looking for an audio endpoint whose friendly name
     contains a distinctive word from the adapter description (e.g. "NVIDIA").
@@ -105,17 +105,16 @@ def move_default_audio_to_display(
     except ImportError:
         return None, "pycaw not installed; run: pip install pycaw"
 
-    device_name = Display.device_name(target_rect)
-    adapter = Display.adapter_name(device_name)
+    adapter = Display.adapter_name(display_device_name)
     if not adapter:
-        return None, f"Could not identify display adapter for monitor at {target_rect}."
+        return None, f"Could not identify display adapter for {display_device_name}."
 
     try:
         endpoints = AudioUtilities.GetAllDevices()
     except Exception as exc:
         return None, f"Failed to enumerate audio devices: {exc}"
 
-    monitor_name = Display.name(target_rect)
+    monitor_name = Display.name_from_device(display_device_name)
 
     def normalize(text: str) -> str:
         text = str(text or "").lower().strip()
@@ -148,7 +147,7 @@ def move_default_audio_to_display(
         adapter_score = 0.0
         if any(word in fname_tokens for word in adapter_tokens):
             adapter_score += 20.0
-        if device_name and device_name.lower() in fname_norm:
+        if display_device_name and display_device_name.lower() in fname_norm:
             adapter_score += 30.0
 
         total_score = monitor_score + adapter_score
